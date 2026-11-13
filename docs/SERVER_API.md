@@ -1,0 +1,62 @@
+# Car-ind CHAT 서버 API
+
+앱(클라이언트)과 서버를 분리했을 때의 통신 규격. 앱의 `net/HttpRoadTalkRepository.kt`가 이 규격을 따른다.
+서버 구현은 자유 (언어/저장소 무관). 규격 검증: `python tools/contract_test.py http://<서버>:8080`
+
+## 공통
+- HTTP/1.1, JSON (UTF-8), 기본 포트 8080
+- 차량번호 비교는 공백을 제거해서 (`"12가 3456" == "12가3456"`), 응답에는 원래 표기 그대로
+- 시각은 서버 시각 ms epoch
+- 앱 주기: presence 갱신은 새 위치가 들어올 때마다 바로 (1~2초, 변화 없으면 5초마다). 근처 조회는 근처에 차가 있으면 0.3초마다, 없으면 1초마다 (최소 0.2초 간격). 메시지 조회 1.5초
+
+## GET /health
+`200 {"ok": true}`
+
+## PUT /v1/presence
+요청 `{"plate":"12가 3456","lat":37.42,"lng":-122.08,"heading":0.0,"speed":16.7,"fixAge":800,"accuracy":5.0}`
+- `lat`/`lng`/`heading`/`speed`/`fixAge`/`accuracy`는 null 가능 (생략해도 됨)
+- `speed`: m/s. 앱이 직전 위치와 비교해 계산
+- `fixAge`: 이 위치가 측정된 뒤 앱이 보낼 때까지 지난 ms. 절대 시각이 아니라서 기기 시계가 서로 달라도 됨
+- `accuracy`: 오차 반경 m (FusedLocation confidence)
+- `fixedAt`: 위치 측정 시각을 **서버 시계**로 나타낸 ms. 앱이 응답의 `now` 로 서버와의 시계 차이를 재서(NTP 방식: 보낸 시각과 받은 시각의 가운데 = 서버 now) 환산한다. 있으면 받는 쪽은 `fixAge` 대신 이 값을 쓴다 → 통신 지연이 위치 보정에 섞이지 않음
+→ `200 {"ok": true, "now": ms}` — 서버가 `updatedAt = 지금`으로 저장 (같은 번호면 덮어쓰기). 받은 필드는 그대로 보관. `now` 는 서버 현재 시각
+
+## GET /v1/nearby?plate=&lat=&lng=&radius=300
+→ `200 {"now":ms,"cars":[{"plate","lat","lng","heading","speed","fixAge","fixedAt","accuracy","updatedAt"}]}`
+- `now`: 서버 현재 시각 (`updatedAt`과 같은 시계). 앱은 상대 위치의 나이를 `(서버 시계로 본 지금) - fixedAt` (없으면 `(now - updatedAt) + fixAge`)로 계산한다. 이 나이로 '그 위치가 측정된 시각'을 알아내 칼만 필터(`net/CarTracker.kt`)에 넣고, 화면에는 0.1초마다 '지금' 위치를 추정해 그린다
+- 요청자 자신 제외, `updatedAt`이 30초 이내인 차만
+- 요청과 상대 모두 좌표가 있으면 haversine 거리 `radius`(기본 300m) 이내만. 한쪽이라도 좌표가 없으면 거리 필터 없이 포함
+- 거리·8방향(앞/뒤/좌/우/대각선)은 앱이 계산
+
+## POST /v1/messages
+요청 `{"fromPlate":"99허 0000","toPlate":"12가 3456","text":"감사합니다"}`
+→ `201 {"id":17,"createdAt":ms,"text":"(필터 적용 후)"}`
+- `id`: 서버 전체 1씩 증가 정수
+- text가 비었거나 120자 초과 → `400 {"error":"invalid"}`
+- 서버 2차 욕설 필터: 공백·숫자·기호를 무시하고 금칙어를 찾아 `*`로 가림. 의미 있는 글자의 절반 이상이 가려지면 저장하지 않고 `422 {"error":"blocked"}`
+
+## GET /v1/messages?to=&after=0
+→ `200 {"messages":[{"id","fromPlate","toPlate","text","createdAt"}],"cursor":17}`
+- `to` 차량에게 온 메시지 중 `id > after` 이고 60초 이내인 것만, id 오름차순
+- `cursor` = 서버가 지금까지 발급한 가장 큰 id. 앱은 다음 요청에 `after=cursor` → 기기 시계가 달라도 중복·누락 없음
+
+## POST /v1/interpret — 음성 명령 해석 (선택 기능)
+운전자가 한 말을 "누구에게 · 정해진 메시지 중 무엇을"로 바꾼다. 서버가 Claude API 를 부른다 (`server/voice_ai.py`). API 키는 서버에만 있고 앱은 모른다.
+
+요청:
+```json
+{"text": "뒷차한테 땡큐 보내줘", "messages": ["감사합니다 🙏", "양보 감사해요", "…7개"], "cars": ["REAR", "FRONT"], "selected": "FRONT"}
+```
+- `messages`: 보낼 수 있는 말 전체 (앱이 정한 목록, 최대 20개). Claude 는 이 중 하나만 고를 수 있다
+- `cars`: 지금 근처에 있는 차의 방향들, `selected`: 화면에서 선택된 차의 방향 (없으면 null). 방향 값은 `FRONT` `REAR` `LEFT` `RIGHT` `FRONT_LEFT` `FRONT_RIGHT` `REAR_LEFT` `REAR_RIGHT`
+
+응답 200:
+```json
+{"ok": true, "target": "REAR", "messageIndex": 0, "message": "감사합니다 🙏", "model": "claude-haiku-5-5", "ms": 640}
+```
+- `target`: 운전자가 말한 방향. 대상을 말하지 않았으면 null (앱이 선택된 차에게 보낸다)
+- `messageIndex`: `messages` 의 번호. 뜻이 맞는 말이 없으면 null (앱은 보내지 않는다)
+
+오류: 400 `invalid` (text·messages 누락) · 503 `ai_unavailable` (`reason`: `no_key` 키 없음, `no_sdk` 라이브러리 없음, 그 밖에는 Claude API 오류 설명). 503 이나 시간 초과(앱 8초)면 앱이 단어 매칭으로 대신한다.
+
+`GET /health` 응답의 `ai` 로 이 기능이 켜져 있는지 볼 수 있다: `ready` / `no_key` / `no_sdk`.

@@ -1,0 +1,47 @@
+package com.roadtalk.app.chat
+
+import com.roadtalk.app.net.NearbyCar
+import com.roadtalk.app.net.RelativePosition
+import com.roadtalk.app.net.VoiceIntent
+
+/**
+ * 음성 명령을 '어느 차에게 / [PresetMessages] 중 무엇을' 보낼지로 확정한다.
+ *
+ *  - Claude 의 해석([VoiceIntent])이 있으면 그것을 따른다 ("뒷차한테 땡큐 보내줘" → 뒷차, 감사합니다)
+ *  - 없으면(서버·키 없음, 시간 초과) 단어 매칭으로 대신한다 ([VoiceCommandParser], [PresetMatcher])
+ *  - 번호판을 말했으면 ("12가 3456한테 …") 해석과 상관없이 그 차에게 보낸다
+ *  - 대상을 말하지 않았으면 지금 선택된 차에게 보낸다
+ */
+object VoiceIntentResolver {
+
+    sealed interface Result {
+        /** car 에게 [PresetMessages.ALL] 의 messageIndex 번을 보낸다. byAi = Claude 가 해석했는지 */
+        data class Send(val car: NearbyCar, val messageIndex: Int, val byAi: Boolean) : Result
+        /** 정해진 메시지 중에 맞는 말이 없다 */
+        data object NoMessage : Result
+        /** 말한 방향에 차가 없다 */
+        data class NoCarAt(val position: RelativePosition) : Result
+        /** 받을 차가 없다 (근처에 차가 없거나, 대상을 말하지 않았는데 선택된 차도 없음) */
+        data object NoCar : Result
+    }
+
+    fun resolve(spoken: String, cars: List<NearbyCar>, selectedPlate: String?, ai: VoiceIntent?): Result {
+        val ruled = VoiceCommandParser.parse(spoken, cars)
+        val messageIndex = if (ai != null) ai.messageIndex else PresetMatcher.match(spoken)
+        messageIndex ?: return Result.NoMessage
+
+        val byPlate = VoiceCommandParser.findByPlate(spoken, cars)
+        val selected = cars.firstOrNull { it.plate == selectedPlate }
+        val car = when {
+            byPlate != null -> byPlate
+            ai != null -> when (val position = ai.target) {
+                null -> selected
+                else -> cars.filter { it.position == position }.minByOrNull { it.distanceMeters }
+                    ?: return Result.NoCarAt(position)
+            }
+            else -> ruled.target ?: selected
+        }
+        car ?: return Result.NoCar
+        return Result.Send(car, messageIndex, byAi = ai != null)
+    }
+}
