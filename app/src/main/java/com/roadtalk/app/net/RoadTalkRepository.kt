@@ -25,7 +25,7 @@ interface RoadTalkRepository {
     suspend fun send(message: RoadMessage)
 
     /**
-     * 운전자가 한 말(spoken)을 서버의 AI(Claude)로 해석한다: 누구에게, presets 중 무엇을.
+     * 운전자가 한 말(spoken)을 서버의 AI(Jev)로 해석한다: 누구에게, presets 중 일치도가 가장 높은 것, 무시해야 할 말인지.
      * 해석을 쓸 수 없으면(이 서버가 지원하지 않음, 키 없음, 시간 초과 등) null → 앱이 단어 매칭으로 대신한다.
      */
     suspend fun interpret(

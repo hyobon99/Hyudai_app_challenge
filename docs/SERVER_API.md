@@ -38,25 +38,29 @@
 ## GET /v1/messages?to=&after=0
 → `200 {"messages":[{"id","fromPlate","toPlate","text","createdAt"}],"cursor":17}`
 - `to` 차량에게 온 메시지 중 `id > after` 이고 60초 이내인 것만, id 오름차순
+- `id` 는 계속 커지는 수다. 서버를 재시작해도 이전보다 작아지지 않게 서버를 켠 시각(ms)에서 시작한다 (0 부터 다시 세면 떠 있던 앱들이 새 메시지를 놓친다. 앱도 `cursor` 가 자기가 본 값보다 작아지면 처음부터 다시 받는다)
 - `cursor` = 서버가 지금까지 발급한 가장 큰 id. 앱은 다음 요청에 `after=cursor` → 기기 시계가 달라도 중복·누락 없음
 
 ## POST /v1/interpret — 음성 명령 해석 (선택 기능)
-운전자가 한 말을 "누구에게 · 정해진 메시지 중 무엇을"로 바꾼다. 서버가 Claude API 를 부른다 (`server/voice_ai.py`). API 키는 서버에만 있고 앱은 모른다.
+운전자가 한 말을 "누구에게 · 정해진 메시지 중 일치도가 가장 높은 것"으로 바꾸고, 욕설·위험한 말인지 판단한다.
+서버가 TypeSafe AI의 Jev 모델을 부른다 (`server/voice_ai.py`). API 키는 서버에만 있고 앱은 모른다.
 
 요청:
 ```json
 {"text": "뒷차한테 땡큐 보내줘", "messages": ["감사합니다 🙏", "양보 감사해요", "…7개"], "cars": ["REAR", "FRONT"], "selected": "FRONT"}
 ```
-- `messages`: 보낼 수 있는 말 전체 (앱이 정한 목록, 최대 20개). Claude 는 이 중 하나만 고를 수 있다
+- `messages`: 보낼 수 있는 말 전체 (앱이 정한 목록, 최대 20개). 이 중 하나만 고를 수 있다
 - `cars`: 지금 근처에 있는 차의 방향들, `selected`: 화면에서 선택된 차의 방향 (없으면 null). 방향 값은 `FRONT` `REAR` `LEFT` `RIGHT` `FRONT_LEFT` `FRONT_RIGHT` `REAR_LEFT` `REAR_RIGHT`
 
 응답 200:
 ```json
-{"ok": true, "target": "REAR", "messageIndex": 0, "message": "감사합니다 🙏", "model": "claude-haiku-5-5", "ms": 640}
+{"ok": true, "blocked": false, "target": "REAR", "messageIndex": 0, "message": "감사합니다 🙏", "score": 0.91, "model": "jev-latest", "ms": 180}
 ```
+- `blocked`: 욕설·비속어·위협·위험한 말 → 앱은 보내지 않고 '띵' 소리만 낸다
 - `target`: 운전자가 말한 방향. 대상을 말하지 않았으면 null (앱이 선택된 차에게 보낸다)
-- `messageIndex`: `messages` 의 번호. 뜻이 맞는 말이 없으면 null (앱은 보내지 않는다)
+- `messageIndex`: `messages` 의 번호. 일치도가 높은 말이 없으면 null (앱은 보내지 않고 '띵' 소리를 낸다)
+- `score`: 고른 문구의 일치도 (0~1, Jev 가 준 확률)
 
-오류: 400 `invalid` (text·messages 누락) · 503 `ai_unavailable` (`reason`: `no_key` 키 없음, `no_sdk` 라이브러리 없음, 그 밖에는 Claude API 오류 설명). 503 이나 시간 초과(앱 8초)면 앱이 단어 매칭으로 대신한다.
+오류: 400 `invalid` (text·messages 누락) · 503 `ai_unavailable` (`reason`: `no_key` 키 없음, `no_sdk` 라이브러리 없음, 그 밖에는 Jev API 오류 설명). 503 이나 시간 초과(앱 10초)면 앱이 단어 매칭으로 대신한다.
 
 `GET /health` 응답의 `ai` 로 이 기능이 켜져 있는지 볼 수 있다: `ready` / `no_key` / `no_sdk`.

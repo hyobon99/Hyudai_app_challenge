@@ -65,10 +65,18 @@ class MainActivity : ComponentActivity() {
      * (음성 파일: app/src/debug/assets/stt_test/ 의 front_thanks · rear_go_first · sorry)
      */
     private fun handleTestIntent(intent: Intent?) {
-        val debuggable = isDebuggable()
-        val clip = intent?.getStringExtra("stt_test") ?: return
-        android.util.Log.d("RoadTalkVoice", "stt_test intent: $clip (debuggable=$debuggable)")
-        if (debuggable) viewModel.testVoiceWithClip(clip)
+        if (!isDebuggable() || intent == null) return
+        // 음성 파일을 STT 에 넣어 보기
+        intent.getStringExtra("stt_test")?.let { clip ->
+            android.util.Log.d("RoadTalkVoice", "stt_test intent: $clip")
+            viewModel.testVoiceWithClip(clip)
+        }
+        // STT 를 건너뛰고 '이렇게 인식됐다'고 치고 그 뒤 과정만 돌려 보기 (시연 자동화가 쓴다)
+        //   adb shell am broadcast --user 10 -a com.roadtalk.app.STT_TEST --es say "뒷차한테 고맙다고 해줘"
+        intent.getStringExtra("say")?.let { text ->
+            android.util.Log.d("RoadTalkVoice", "say intent: $text")
+            viewModel.simulateVoice(text)
+        }
     }
 
     private companion object {

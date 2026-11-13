@@ -42,10 +42,17 @@ data class NearbyCar(
 )
 
 /**
- * 음성 명령을 서버(Claude)가 해석한 결과.
- * target = 운전자가 말한 방향 (대상을 말하지 않았으면 null), messageIndex = 정해진 메시지의 번호 (맞는 말이 없으면 null)
+ * 음성 명령을 서버의 AI(TypeSafe AI 의 Jev 모델)가 해석한 결과.
+ * target = 운전자가 말한 방향 (대상을 말하지 않았으면 null)
+ * messageIndex = 정해진 메시지 중 일치도가 가장 높은 것의 번호 (일치도가 높은 말이 없으면 null)
+ * blocked = 욕설·비속어·위험한 말이라 무시해야 함, score = 고른 메시지의 일치도 (0~1)
  */
-data class VoiceIntent(val target: RelativePosition?, val messageIndex: Int?)
+data class VoiceIntent(
+    val target: RelativePosition?,
+    val messageIndex: Int?,
+    val blocked: Boolean = false,
+    val score: Float? = null,
+)
 
 data class RoadMessage(
     val id: Long,

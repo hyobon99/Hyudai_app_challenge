@@ -8,7 +8,8 @@
 
 앱 화면은 꾸민 것이 아니다. 시나리오의 차 위치를 에뮬레이터 GPS 에 계속 넣어 주면(geo fix),
 앱이 FusedLocation SDK 로 그 위치를 받아 서버에 올리고, 상대 차의 위치 벡터를 계산해 그린다.
-메시지도 에뮬레이터 화면에서 실제로 '차를 누른 채 끌기' 동작을 해서 보낸다.
+메시지는 앱의 음성 명령 경로로 보낸다: '이렇게 말했다'는 글자를 앱에 넣어 주면(시험용 신호), 앱이 실제와 같이
+정해진 메시지 중 가장 가까운 말을 골라 상대 차에게 보낸다. (마이크 인식 단계만 건너뛴다)
 
 사용법 (서버와 에뮬레이터 2대, 두 대 모두 Car-ind CHAT 가 떠 있어야 함):
     python tools/scenario/run_scenario.py merge      # 끼어들기 → 감사 인사
@@ -226,8 +227,8 @@ def scenario_merge(dev_a, dev_b):
         (6.2, "B가 A 바로 앞으로 급하게 끼어들어요"),
         (6.9, "A(파랑, 내 차)가 급브레이크를 밟아 자리를 내줘요"),
         (9.2, "A가 양보해서 두 차 사이가 벌어졌어요"),
-        (12.2, "B: 화면에서 뒤차(A)를 누른 채 끌어서 인사를 보내요"),
-        (16.2, "A: 앞차(B)를 누른 채 끌어서 답장해요"),
+        (12.2, "B: 버튼을 꾹 누르고 \"양보해 줘서 고마워요\"라고 말해요"),
+        (16.2, "A: 버튼을 꾹 누르고 \"괜찮아요\"라고 답해요"),
         (20.5, "비상등 대신 말로 전했어요"),
     ]
     actions = [(13.0, "B", "A", 1), (17.0, "A", "B", 5)]
@@ -254,7 +255,7 @@ def scenario_yield(dev_a, dev_b):
     steps = [
         (-99, "좁은 골목. 양쪽에 주차된 차 때문에 한 대만 지나갈 수 있어요"),
         (6.0, "A(파랑, 내 차)와 B(주황)가 마주쳐서 둘 다 멈췄어요"),
-        (9.2, "A: 마주 선 차(B)를 누른 채 끌어서 \"먼저 가세요\""),
+        (9.2, "A: 버튼을 꾹 누르고 \"먼저 가세요\"라고 말해요"),
         (12.4, "B: \"감사합니다\" 답장"),
         (15.5, "A가 오른쪽 빈자리로 비켜 줘요"),
         (21.0, "B가 지나가요"),
@@ -349,12 +350,15 @@ def on_screen_position(serial, plate):
     return found
 
 
-def drag_send(serial, start, index, hold_ms=1400, reach=190):
-    """화면에서 start 를 누른 채 index 번째 방향으로 끌었다 놓는다"""
-    a = math.radians(index * 360.0 / len(RADIAL_MESSAGES))
-    x1 = int(start[0] + reach * math.sin(a))
-    y1 = int(start[1] - reach * math.cos(a))
-    adb(serial, "shell", "input", "swipe", str(start[0]), str(start[1]), str(x1), str(y1), str(hold_ms))
+# 정해진 메시지마다 운전자가 실제로 할 법한 말 (앱이 이 말을 듣고 그 메시지를 골라야 한다)
+SPOKEN = ["고맙습니다", "양보해 줘서 고마워요", "먼저 가세요", "조심히 가세요", "미안합니다", "괜찮아요", "안녕하세요"]
+
+
+def say(serial, to_plate, index):
+    """앱에 '이 차에게 이렇게 말했다'고 넣어 준다 (디버그 빌드의 시험용 신호. 마이크 인식만 건너뛰고 나머지는 실제와 같다)"""
+    text = "%s한테 %s" % (to_plate, SPOKEN[index])
+    adb(serial, "shell", "am", "broadcast", "--user", "10", "-a", "com.roadtalk.app.STT_TEST", "--es", "say", "'%s'" % text)
+    return text
 
 
 # ------------------------------------------------------------------ 실행
@@ -412,15 +416,13 @@ def run_live(sc, server, out_dir, record=True, events=None, stop=None, with_acti
             cursor = server.cursor(target.plate)
         except Exception:
             cursor = 0
-        how = "화면에서 끌어서"
+        how = "음성 명령으로"
         ok = False
         sent_at = now()
-        for attempt in range(2):   # 차를 못 맞혔으면 위치를 다시 읽어 한 번 더 해 본다
-            pos = on_screen_position(sender.device, target.plate)
-            if pos:
-                drag_send(sender.device, pos, index)
-            sent_at = now() - 0.2   # 손을 뗀 순간 (adb 명령이 돌아오기까지의 시간을 뺌)
-            for _ in range(8):
+        for attempt in range(2):   # 못 보냈으면 한 번 더
+            say(sender.device, target.plate, index)
+            sent_at = now() - 0.2
+            for _ in range(10):
                 try:
                     if server.arrived(target.plate, sender.plate, cursor):
                         ok = True
@@ -431,8 +433,8 @@ def run_live(sc, server, out_dir, record=True, events=None, stop=None, with_acti
             if ok:
                 break
         if not ok:
-            # 화면 동작이 차를 못 맞혔을 때: 영상 흐름이 끊기지 않게 서버로 직접 보낸다
-            how = "서버로 직접(화면 동작 실패)"
+            # 앱이 보내지 못했을 때: 영상 흐름이 끊기지 않게 서버로 직접 보낸다
+            how = "서버로 직접(앱 전송 실패)"
             server.send(sender.plate, target.plate, text)
             sent_at = now()
         with lock:

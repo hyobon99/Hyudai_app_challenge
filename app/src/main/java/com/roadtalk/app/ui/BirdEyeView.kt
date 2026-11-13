@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -73,37 +74,19 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** 차를 누른 채 끌었다 놓으면 보내지는 메시지 (7개). 음성 명령도 같은 목록을 쓴다 → chat/PresetMessages.kt */
-val RADIAL_MESSAGES = PresetMessages.ALL
-
 /** 화면에 보이는 범위 (m). 내 차 주변을 크게 보도록 좁게 잡고, 앞쪽을 더 많이 보도록 내 차를 가운데보다 아래에 둔다 */
 private const val FRONT_M = 12f
 private const val REAR_M = 7f
 private const val LANE_M = 3.5f
 private const val CAR_LENGTH_M = 4.6f
 private const val CAR_WIDTH_M = 1.9f
-/** 누른 자리에서 이만큼은 끌어야 방향이 정해진다 (그 안에서 놓으면 전송 취소 · 차 선택만) */
-private const val DEAD_ZONE_DP = 44
-
-/** 누른 차(plate)와 손가락 위치. anchor = 방향 메뉴를 그릴 중심 */
-private data class DragState(val plate: String, val anchor: Offset, val start: Offset, val current: Offset) {
-    /** 끈 방향이 가리키는 메시지 번호. 거의 안 움직였으면(취소 영역) null */
-    fun sector(deadZonePx: Float): Int? {
-        val dx = current.x - start.x
-        val dy = current.y - start.y
-        if (hypot(dx, dy) < deadZonePx) return null
-        val deg = (Math.toDegrees(atan2(dx, -dy).toDouble()) + 360) % 360   // 위쪽 0°, 시계 방향
-        val count = RADIAL_MESSAGES.size
-        return (deg / (360.0 / count)).roundToInt() % count
-    }
-}
-
 /**
- * 위에서 내려다본(bird's-eye) 도로 화면.
+ * 위에서 내려다본(bird's-eye) 도로 화면 + 말하기 버튼.
  * 실제 주변 풍경이 아니라 Car-ind CHAT 을 켠 차만, GPS 로 계산한 상대 위치 벡터(앞뒤·좌우 m) 자리에 그린다.
- *  - 차를 누른 채 끌기: 방향 메뉴(메시지 7개가 정칠각형으로 놓임)가 뜨고, 놓은 방향의 메시지([RADIAL_MESSAGES])가 그 차에게 전송된다
- *  - 차를 짧게 탭: 그 차를 받는 사람으로 선택 (음성 메시지의 기본 대상)
+ *  - 차를 탭: 그 차를 받는 사람으로 선택 (파란 테두리). 말할 때 대상을 말하지 않으면 이 차에게 간다
  *  - 빈 도로를 탭: 그 자리가 속한 8방향 칸에서 가장 가까운 차를 선택
+ *  - 아래 버튼을 꾹 누른 채 말하기: 누르고 있는 동안 음성을 인식하고(STT SDK), 손을 떼면 인식된 말이
+ *    정해진 메시지(chat/PresetMessages.kt) 중 가장 가까운 것으로 바뀌어 전송된다
  */
 @Composable
 fun BirdEyePanel(
@@ -114,15 +97,14 @@ fun BirdEyePanel(
     voice: VoiceGateway.State,
     onSelectCar: (String) -> Unit,
     onSelectDirection: (RelativePosition) -> Unit,
-    onSend: (plate: String, text: String) -> Unit,
-    onMic: () -> Unit,
+    onTalkStart: () -> Unit,
+    onTalkEnd: () -> Unit,
     modifier: Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
-    var drag by remember { mutableStateOf<DragState?>(null) }
     @Suppress("NAME_SHADOWING")
     val cars = rememberSmoothedCars(cars)
-    // 위치가 계속 갱신돼도 끌고 있는 동작이 끊기지 않도록 최신 값만 참조
+    // 위치가 계속 갱신돼도 탭 처리가 최신 위치를 보도록
     val currentCars by rememberUpdatedState(cars)
     // 기본은 크게(앞 12m·뒤 7m) 보여주고, 그보다 멀리 있는 차가 있으면 그 차가 들어올 만큼만 부드럽게 넓힌다
     val rangeSteps = remember { RangeSteps() }
@@ -147,8 +129,6 @@ fun BirdEyePanel(
     }
     val currentOnSelectCar by rememberUpdatedState(onSelectCar)
     val currentOnSelectDirection by rememberUpdatedState(onSelectDirection)
-    val currentOnSend by rememberUpdatedState(onSend)
-    val listening = voice.listen != VoiceGateway.ListenState.IDLE
 
     Column(
         modifier
@@ -156,31 +136,13 @@ fun BirdEyePanel(
             .background(RoadColors.Surface)
             .padding(16.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("내 주변 Car-ind CHAT 차량", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary)
-                Text(
-                    when {
-                        listening -> "듣는 중… ${voice.partial}"
-                        voice.partial.isNotEmpty() -> "인식됨: ${voice.partial}"
-                        else -> "차를 누른 채 원하는 방향으로 끌면 메시지가 전송돼요"
-                    },
-                    fontSize = 14.sp,
-                    color = if (listening || voice.partial.isNotEmpty()) RoadColors.Accent else RoadColors.TextSecondary,
-                    maxLines = 1,
-                )
-            }
-            Box(
-                Modifier
-                    .size(52.dp)
-                    .clip(CircleShape)
-                    .background(if (listening) RoadColors.Error else RoadColors.Accent)
-                    .clickable(onClick = onMic),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(if (listening) "■" else "🎤", fontSize = 22.sp, color = Color.White)
-            }
-        }
+        Text("내 주변 Car-ind CHAT 차량", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary)
+        Text(
+            "받을 차를 누르고, 아래 버튼을 꾹 누른 채 말하세요",
+            fontSize = 14.sp,
+            color = RoadColors.TextSecondary,
+            maxLines = 1,
+        )
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier
@@ -197,49 +159,22 @@ fun BirdEyePanel(
                         canvasSize = it.size
                     }
                     .pointerInput(Unit) {
-                        val deadZone = DEAD_ZONE_DP.dp.toPx()
                         awaitEachGesture {
-                            val down = awaitFirstDown()
+                            awaitFirstDown()
+                            val up = waitForUpOrCancellation() ?: return@awaitEachGesture
                             val scene = Scene(size.width.toFloat(), size.height.toFloat(), currentFront, currentRear)
                             val hitRadius = maxOf(32.dp.toPx(), scene.ppm * 2.6f)
                             val hit = currentCars
                                 .map { it to scene.toScreen(placement(it, scene)) }
-                                .minByOrNull { (_, p) -> hypot(p.x - down.position.x, p.y - down.position.y) }
-                                ?.takeIf { (_, p) -> hypot(p.x - down.position.x, p.y - down.position.y) <= hitRadius }
-                            if (hit == null) {
-                                // 빈 도로: 탭하면 그 방향 칸의 차를 선택
-                                val up = waitForUpOrCancellation() ?: return@awaitEachGesture
+                                .minByOrNull { (_, p) -> hypot(p.x - up.position.x, p.y - up.position.y) }
+                                ?.takeIf { (_, p) -> hypot(p.x - up.position.x, p.y - up.position.y) <= hitRadius }
+                            if (hit != null) {
+                                currentOnSelectCar(hit.first.plate)
+                            } else {
+                                // 빈 도로: 그 방향 칸의 차를 선택
                                 val (forward, lateral) = scene.toMeters(up.position)
                                 currentOnSelectDirection(Geo.positionOf(forward, lateral))
-                                return@awaitEachGesture
                             }
-                            down.consume()
-                            val (car, carCenter) = hit
-                            // 방향 메뉴가 화면 밖으로 잘리지 않게 중심을 안쪽으로 당긴다
-                            val margin = min(250.dp.toPx(), min(size.width, size.height) / 2f)
-                            val anchor = Offset(
-                                carCenter.x.coerceIn(margin, (size.width - margin).coerceAtLeast(margin)),
-                                carCenter.y.coerceIn(margin, (size.height - margin).coerceAtLeast(margin)),
-                            )
-                            var state = DragState(car.plate, anchor, down.position, down.position)
-                            drag = state
-                            var released = false
-                            while (true) {
-                                val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                                state = state.copy(current = change.position)
-                                if (change.changedToUp()) {
-                                    released = true
-                                    break
-                                }
-                                if (!change.pressed) break
-                                change.consume()
-                                drag = state
-                            }
-                            drag = null
-                            if (!released) return@awaitEachGesture
-                            val sector = state.sector(deadZone)
-                            if (sector == null) currentOnSelectCar(state.plate)
-                            else currentOnSend(state.plate, RADIAL_MESSAGES[sector])
                         }
                     }
             ) {
@@ -266,7 +201,7 @@ fun BirdEyePanel(
                         body = if (clipped) RoadColors.SurfaceHigh.copy(alpha = 0.6f) else RoadColors.SurfaceHigh,
                         outline = if (isSelected) RoadColors.Accent else null,
                     )
-                    // 선택 테두리가 있으면 그만큼 글자·말풍선을 더 바깥으로
+                    // 선택 테두리가 있으면 그만큼 글자를 더 바깥으로
                     val half = CAR_LENGTH_M * scene.ppm / 2 + (if (isSelected) 12.dp.toPx() else 0f)
                     val distance = if (car.distanceMeters < 0) "거리 미확인" else "${car.distanceMeters}m"
                     drawCenteredText(
@@ -299,17 +234,59 @@ fun BirdEyePanel(
                         TextStyle(color = RoadColors.TextSecondary, fontSize = 15.sp),
                     )
                 }
-                drag?.let { drawRadialMenu(it, textMeasurer) }
             }
         }
+        Spacer(Modifier.height(12.dp))
+        TalkButton(voice, onTalkStart, onTalkEnd)
+    }
+}
+
+/**
+ * 꾹 누르고 있는 동안만 듣는 말하기 버튼. 운전 중에도 누르기 쉽게 크게 만든다.
+ * 누르면 [onStart] (음성 인식 시작), 손을 떼거나 버튼 밖으로 벗어나면 [onEnd] (인식 끝 → 전송).
+ */
+@Composable
+private fun TalkButton(voice: VoiceGateway.State, onStart: () -> Unit, onEnd: () -> Unit) {
+    var pressed by remember { mutableStateOf(false) }
+    val currentStart by rememberUpdatedState(onStart)
+    val currentEnd by rememberUpdatedState(onEnd)
+    val listening = pressed || voice.listen != VoiceGateway.ListenState.IDLE
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .height(TALK_BUTTON_HEIGHT_DP.dp)
+            .clip(RoundedCornerShape(28.dp))
+            .background(if (pressed) RoadColors.Error else RoadColors.Accent)
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown().consume()
+                    pressed = true
+                    currentStart()
+                    waitForUpOrCancellation()
+                    pressed = false
+                    currentEnd()
+                }
+            },
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Text(
-            "Car-ind CHAT을 켠 차만 표시돼요 · GPS 상대 위치 기준(수 m 오차)",
-            fontSize = 12.sp,
-            color = RoadColors.TextSecondary,
-            modifier = Modifier.padding(top = 8.dp),
+            if (pressed) "듣는 중… 말하고 손을 떼세요" else "🎤 꾹 누르고 말하기",
+            fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1,
+        )
+        Text(
+            when {
+                voice.partial.isNotEmpty() -> if (listening) voice.partial else "인식됨: ${voice.partial}"
+                pressed -> "예: 뒷차한테 고맙다고 해줘"
+                else -> "정해진 인사 중 가장 가까운 말이 전송돼요"
+            },
+            fontSize = 17.sp, color = Color.White.copy(alpha = 0.9f), maxLines = 1,
+            modifier = Modifier.padding(top = 6.dp),
         )
     }
 }
+
+private const val TALK_BUTTON_HEIGHT_DP = 132
 
 /**
  * 상대 위치는 칼만 필터가 0.1초마다 계산해 준다 (net/CarTracker). 그 사이를 매 프레임 조금씩 따라가게 해서 화면 주사율로 매끈하게 그린다.
@@ -491,69 +468,6 @@ private fun DrawScope.drawCar(center: Offset, headingDeg: Float, ppm: Float, bod
         drawCircle(head, r, Offset(tl.x + w * 0.78f, tl.y + l * 0.05f))
         drawCircle(tail, r, Offset(tl.x + w * 0.22f, tl.y + l * 0.95f))
         drawCircle(tail, r, Offset(tl.x + w * 0.78f, tl.y + l * 0.95f))
-    }
-}
-
-/**
- * 차를 누르고 있는 동안 뜨는 방향 메뉴. 메시지들을 위쪽(12시)부터 시계 방향으로 같은 각도 간격으로 놓는다
- * (7개면 정칠각형의 꼭짓점). 손가락이 가리키는 방향의 메시지가 강조된다.
- */
-private fun DrawScope.drawRadialMenu(drag: DragState, textMeasurer: TextMeasurer) {
-    drawRect(Color.Black.copy(alpha = 0.55f))
-    val deadZone = DEAD_ZONE_DP.dp.toPx()
-    val radius = min(180.dp.toPx(), min(size.width, size.height) / 2f - 40.dp.toPx())
-    val active = drag.sector(deadZone)
-    val c = drag.anchor
-    // 꼭짓점(메시지 자리)을 이은 정다각형 테두리
-    val count = RADIAL_MESSAGES.size
-    val step = 360.0 / count
-    fun vertex(i: Int): Offset {
-        val rad = Math.toRadians(i * step)
-        return Offset(c.x + (radius * sin(rad)).toFloat(), c.y - (radius * cos(rad)).toFloat())
-    }
-    val outline = Path().apply {
-        moveTo(vertex(0).x, vertex(0).y)
-        for (i in 1 until count) lineTo(vertex(i).x, vertex(i).y)
-        close()
-    }
-    drawPath(outline, RoadColors.SurfaceHigh.copy(alpha = 0.6f), style = Stroke(1.5.dp.toPx()))
-    drawCircle(if (active == null) RoadColors.Accent.copy(alpha = 0.35f) else RoadColors.SurfaceHigh, deadZone, c)
-    drawCenteredText(
-        textMeasurer, if (active == null) "끌어서 선택" else "놓으면 전송",
-        Offset(c.x, c.y - 8.sp.toPx()),
-        TextStyle(color = RoadColors.TextPrimary, fontSize = 12.sp),
-    )
-    // 손가락이 끈 방향
-    val dx = drag.current.x - drag.start.x
-    val dy = drag.current.y - drag.start.y
-    if (active != null) {
-        val len = hypot(dx, dy)
-        val reach = min(len, radius - 30.dp.toPx())
-        drawLine(
-            RoadColors.Accent, c, Offset(c.x + dx / len * reach, c.y + dy / len * reach),
-            strokeWidth = 4.dp.toPx(), cap = StrokeCap.Round,
-        )
-    }
-    RADIAL_MESSAGES.forEachIndexed { i, text ->
-        val p = vertex(i)
-        val selected = i == active
-        val layout = textMeasurer.measure(
-            AnnotatedString(text),
-            TextStyle(
-                color = if (selected) Color.White else RoadColors.TextPrimary,
-                fontSize = if (selected) 20.sp else 16.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            ),
-        )
-        val padX = 12.dp.toPx()
-        val padY = 8.dp.toPx()
-        val w = layout.size.width + padX * 2
-        val h = layout.size.height + padY * 2
-        // 가장자리에서 글자가 잘리지 않게 안쪽으로
-        val left = (p.x - w / 2).coerceIn(4.dp.toPx(), (size.width - w - 4.dp.toPx()).coerceAtLeast(4.dp.toPx()))
-        val top = (p.y - h / 2).coerceIn(4.dp.toPx(), (size.height - h - 4.dp.toPx()).coerceAtLeast(4.dp.toPx()))
-        drawRoundRect(if (selected) RoadColors.Accent else RoadColors.SurfaceHigh, Offset(left, top), Size(w, h), CornerRadius(h / 2))
-        drawText(layout, topLeft = Offset(left + padX, top + padY))
     }
 }
 

@@ -1,5 +1,5 @@
 """Car-ind CHAT 서버 (docs/SERVER_API.md 규격). Python 3.10+ 표준 라이브러리만 사용.
-(음성 명령을 Claude 로 해석하는 기능만 anthropic 라이브러리와 API 키가 필요하다 → voice_ai.py. 없으면 그 기능만 꺼진다)
+(음성 명령을 TypeSafe AI 의 Jev 모델로 해석하는 기능만 typesafe-sdk 라이브러리와 API 키가 필요하다 → voice_ai.py. 없으면 그 기능만 꺼진다)
 
 실행:  python server/roadtalk_server.py [포트]      (기본 8080, 0.0.0.0 에 바인딩)
 규격 검증:  python tools/contract_test.py http://127.0.0.1:8080
@@ -24,7 +24,9 @@ BANNED = ["시발", "씨발", "ㅅㅂ", "ㅆㅂ", "병신", "ㅂㅅ", "개새", 
 lock = threading.Lock()
 presence: dict[str, dict] = {}   # plateKey -> 최근 위치
 messages: list[dict] = []
-last_id = 0
+# 메시지 번호는 서버를 켠 시각(ms)에서 시작한다. 0 부터 다시 세면, 서버를 재시작했을 때 이미 떠 있던 앱들이
+# '내가 본 번호 이후'만 달라고 해서 새 메시지를 전부 놓친다 (실제로 겪은 문제)
+last_id = int(time.time() * 1000)
 
 
 def now_ms() -> int:
@@ -95,7 +97,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         qs = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/health":
-            # ai: 음성 명령 해석(Claude)을 쓸 수 있는지. ready / no_key / no_sdk
+            # ai: 음성 명령 해석(Jev)을 쓸 수 있는지. ready / no_key / no_sdk
             return self.send_json(200, {"ok": True, "ai": voice_ai.status(), "aiModel": voice_ai.MODEL})
         if url.path == "/v1/nearby":
             return self.nearby(qs)
@@ -163,7 +165,8 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- POST ----
     def interpret(self):
-        """운전자가 한 말 → (누구에게, 정해진 메시지 중 어느 것). Claude 를 쓸 수 없으면 503 → 앱이 단순 매칭으로 대신한다"""
+        """운전자가 한 말 → (누구에게, 정해진 메시지 중 일치도가 가장 높은 것). 욕설·위험한 말이면 blocked.
+        Jev 를 쓸 수 없으면 503 → 앱이 단어 매칭으로 대신한다"""
         body = self.read_json() or {}
         text = body.get("text")
         choices = body.get("messages")
@@ -181,9 +184,11 @@ class Handler(BaseHTTPRequestHandler):
         index = result["messageIndex"]
         self.send_json(200, {
             "ok": True,
+            "blocked": result["blocked"],                                 # 욕설·위험한 말 → 앱은 보내지 않고 '띵' 소리만 낸다
             "target": result["target"],                                   # 방향, 대상을 말하지 않았으면 null
-            "messageIndex": index,                                        # messages 의 번호, 맞는 말이 없으면 null
+            "messageIndex": index,                                        # messages 의 번호, 일치도가 높은 말이 없으면 null
             "message": choices[index] if index is not None else None,
+            "score": result["score"],                                     # 고른 문구의 일치도 (0~1)
             "model": voice_ai.MODEL,
             "ms": result["ms"],
         })

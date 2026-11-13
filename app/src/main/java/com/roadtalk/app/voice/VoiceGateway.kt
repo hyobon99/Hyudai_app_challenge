@@ -23,6 +23,7 @@ import ai.pleos.playground.tts.listener.OnInitializeListener as TtsInitListener
  *  2) SpeechToText(context, Mode) 생성 → initialize(OnInitializeListener)
  *  3) 초기화 성공 뒤 addListener(ResultListener), setLocale(Locale.KOREA)
  *  4) request() 로 차량 마이크 인식 시작 → onUpdated(text, completed) 로 중간·최종 결과 → stop()
+ *     (말하기 버튼을 누르면 request(), 손을 떼면 stop(). 손을 뗄 때까지 들은 말이 결과가 된다)
  *  5) 끝낼 때 removeListener → release()
  * ON_DEVICE 모드를 써서 앱 등록(서버 인증) 없이 바로 동작하게 한다.
  * 서버 인식 품질이 필요하면 Pleos Playground 에서 My Project 를 만들어 받은 값으로 HYBRID + registerApp() 을 쓰면 된다.
@@ -44,20 +45,50 @@ class VoiceGateway(context: Context) {
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
-    /** 최종 인식 결과 콜백 (ViewModel 이 등록) */
+    /** 최종 인식 결과 콜백 (ViewModel 이 등록). 한 번 말할 때마다 한 번만 불린다 */
     var onFinalResult: ((String) -> Unit)? = null
+
+    /** 이번에 듣기 시작한 뒤로 인식된 말 / 그 말을 이미 넘겼는지 */
+    @Volatile private var heard = ""
+    @Volatile private var delivered = false
+
+    private fun beginUtterance() {
+        heard = ""
+        delivered = false
+    }
+
+    @Synchronized
+    private fun deliver(text: String) {
+        if (delivered || text.isBlank()) return
+        delivered = true
+        onFinalResult?.invoke(text)
+        // 화면의 '인식됨: …' 은 잠깐만 보여 주고 지운다 (예전 문장이 계속 남아 있으면 헷갈린다)
+        Thread({
+            Thread.sleep(SHOW_HEARD_MILLIS)
+            if (delivered && _state.value.partial == text) update { copy(partial = "") }
+        }, "stt-clear").start()
+    }
 
     private val resultListener = object : ResultListener {
         override fun onReady() = update { copy(listen = ListenState.PREPARING) }
         override fun onStartedRecognition() = update { copy(listen = ListenState.LISTENING, partial = "") }
         override fun onUpdated(stt: String, completed: Boolean) {
             Log.d(TAG, "STT ${if (completed) "final" else "partial"}: $stt")
+            heard = stt
             update { copy(partial = stt) }
-            if (completed && stt.isNotBlank()) onFinalResult?.invoke(stt)
+            if (completed) deliver(stt)
         }
         override fun onUpdatedEpdData(on: Long, off: Long) = Unit
         override fun onUpdatedRms(rms: Double) = Unit
-        override fun onEndedRecognition() = update { copy(listen = ListenState.IDLE) }
+        override fun onEndedRecognition() {
+            update { copy(listen = ListenState.IDLE) }
+            // SDK 는 '인식 끝'을 알린 직후에 최종 결과(더 정확하게 다듬은 문장)를 주는 경우가 많다 → 잠깐 기다린다.
+            // 버튼에서 손을 떼서 끝났는데 최종 결과가 끝내 안 오면, 그때까지 들은 말을 결과로 쓴다
+            Thread({
+                Thread.sleep(FINAL_WAIT_MILLIS)
+                deliver(heard)
+            }, "stt-final").start()
+        }
         override fun onError(errorType: SttError) {
             Log.w(TAG, "STT error $errorType")
             update { copy(listen = ListenState.IDLE, error = "음성 인식: ${describe(errorType)}") }
@@ -123,6 +154,7 @@ class VoiceGateway(context: Context) {
             return
         }
         try {
+            beginUtterance()
             update { copy(error = null, partial = "") }
             stt.request()
         } catch (e: Exception) {
@@ -145,6 +177,7 @@ class VoiceGateway(context: Context) {
             update { copy(error = "음성인식이 아직 준비되지 않았어요") }
             return
         }
+        beginUtterance()
         update { copy(error = null, partial = "") }
         Log.d(TAG, "sending ${pcm.size} bytes of PCM audio to STT")
         Thread({
@@ -198,5 +231,9 @@ class VoiceGateway(context: Context) {
         const val TAG = "RoadTalkVoice"
         /** 16kHz · 16bit · mono 의 0.1초 분량 */
         const val PCM_CHUNK_BYTES = 3_200
+        /** '인식 끝' 뒤에 최종 결과를 기다리는 시간 */
+        const val FINAL_WAIT_MILLIS = 500L
+        /** 인식된 문장을 화면에 남겨 두는 시간 */
+        const val SHOW_HEARD_MILLIS = 5_000L
     }
 }

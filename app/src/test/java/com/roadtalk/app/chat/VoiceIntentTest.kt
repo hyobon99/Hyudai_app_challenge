@@ -97,6 +97,32 @@ class VoiceIntentTest {
         assertNull(PresetMatcher.match("배고프다"))
     }
 
+    // ---- 비속어·위험한 말은 무시
+
+    @Test
+    fun profanityIsIgnoredEvenWhenItAlsoContainsAGreeting() {
+        // 앱의 금칙어 사전에 걸린 경우: AI 에 묻지 않아도 무시
+        assertEquals(Result.Blocked, VoiceIntentResolver.resolve("야 이 새끼야 고맙다", cars, front.plate, null, hasProfanity = true))
+        assertEquals(true, ProfanityFilter().check("야 이 새끼야 고맙다").hasProfanity)
+        assertEquals(false, ProfanityFilter().check("뒷차한테 고맙다고 해줘").hasProfanity)
+    }
+
+    @Test
+    fun aiBlockedResultIsIgnored() {
+        // AI 가 위험한 말이라고 판단한 경우: 고른 문구가 있어도 보내지 않는다
+        val ai = VoiceIntent(RelativePosition.FRONT, PresetMessages.GO_AHEAD, blocked = true, score = 0.6f)
+        assertEquals(Result.Blocked, VoiceIntentResolver.resolve("앞차 확 밀어버려", cars, front.plate, ai))
+    }
+
+    @Test
+    fun chimeIsAShortFadingTone() {
+        val samples = com.roadtalk.app.voice.Chime.samples()
+        assertEquals((com.roadtalk.app.voice.Chime.SAMPLE_RATE * com.roadtalk.app.voice.Chime.DURATION_SECONDS).toInt(), samples.size)
+        val loudStart = samples.take(4000).maxOf { kotlin.math.abs(it.toInt()) }
+        val quietEnd = samples.takeLast(4000).maxOf { kotlin.math.abs(it.toInt()) }
+        org.junit.Assert.assertTrue("start=$loudStart end=$quietEnd", loudStart > 8000 && quietEnd < loudStart / 10)
+    }
+
     @Test
     fun thereAreSevenMessagesAndNoHighBeamOne() {
         assertEquals(7, PresetMessages.ALL.size)

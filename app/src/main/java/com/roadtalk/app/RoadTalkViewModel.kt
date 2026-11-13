@@ -22,6 +22,7 @@ import com.roadtalk.app.net.RoadMessage
 import com.roadtalk.app.net.RoadTalkRepository
 import com.roadtalk.app.net.SimulatedRoadTalkRepository
 import com.roadtalk.app.vehicle.VehicleGateway
+import com.roadtalk.app.voice.Chime
 import com.roadtalk.app.voice.VoiceGateway
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -40,6 +41,7 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
 
     val vehicle = VehicleGateway(app)
     val voice = VoiceGateway(app)
+    private val chime = Chime()
     val navi = NaviGateway(app)
     private val location = LocationGateway(app)
     private val plateStore = PlateStore(app)
@@ -175,16 +177,17 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         if (navi.cancelRoute()) showNotice("경로 안내 종료를 요청했어요.")
     }
 
-    /** 도로 화면에서 차를 누른 채 끌어서 고른 메시지를 그 차에게 보낸다 */
+    /** 정해진 메시지를 그 차에게 보낸다 (음성 명령으로 고른 것) */
     fun sendTo(plate: String, text: String): Boolean {
         _selectedPlate.value = plate
         return send(plate, text)
     }
 
-    fun toggleListening() {
-        if (voice.state.value.listen == VoiceGateway.ListenState.IDLE) voice.startListening()
-        else voice.stopListening()
-    }
+    /** 말하기 버튼을 누름: 듣기 시작 */
+    fun startTalking() = voice.startListening()
+
+    /** 말하기 버튼에서 손을 뗌: 듣기 끝 → 그때까지 들은 말이 [onVoiceResult] 로 온다 */
+    fun stopTalking() = voice.stopListening()
 
     /** 에뮬레이터 마이크가 안 될 때 음성 명령 흐름을 시험하는 용도 */
     fun simulateVoice(spoken: String) = onVoiceResult(spoken)
@@ -211,16 +214,20 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 음성 인식 결과 처리. 보낼 수 있는 말은 정해진 7개([PresetMessages])뿐이라, 운전자가 자유롭게 말하면
-     * 서버의 AI(Claude)가 '누구에게 · 그중 무엇을' 로 바꿔 준다. AI 를 쓸 수 없으면 단어 매칭으로 대신한다.
+     * 음성 인식 결과 처리. 보낼 수 있는 말은 정해진 7개([PresetMessages])뿐이다.
+     *  1) 비속어·위험한 말이면 무시하고 '띵' 소리만 낸다 (앱의 금칙어 사전, 그리고 서버의 AI 판단)
+     *  2) 서버의 AI(TypeSafe AI 의 Jev)가 7개 중 일치도가 가장 높은 말과 받을 차를 고른다. AI 를 쓸 수 없으면 단어 매칭으로 대신한다
+     *  3) 일치도가 높은 말이 있으면 그 차에게 보낸다 (받는 차에서는 TTS 로 읽어 준다)
      */
     private fun onVoiceResult(spoken: String) {
         viewModelScope.launch {
             val cars = nearbyCars.value
             val selectedPlate = _selectedPlate.value
             val selected = cars.firstOrNull { it.plate == selectedPlate }
-            val ai = _repository.value.interpret(spoken, PresetMessages.ALL, cars, selected?.position)
-            when (val result = VoiceIntentResolver.resolve(spoken, cars, selectedPlate, ai)) {
+            val hasProfanity = filter.check(spoken).hasProfanity
+            // 금칙어가 있으면 서버에 묻지도 않는다
+            val ai = if (hasProfanity) null else _repository.value.interpret(spoken, PresetMessages.ALL, cars, selected?.position)
+            when (val result = VoiceIntentResolver.resolve(spoken, cars, selectedPlate, ai, hasProfanity)) {
                 is VoiceIntentResolver.Result.Send -> {
                     val text = PresetMessages.ALL[result.messageIndex]
                     if (sendTo(result.car.plate, text)) {
@@ -228,9 +235,14 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
                         voice.speak(SpeechText.sent(result.car.position.label, text))
                     }
                 }
+                VoiceIntentResolver.Result.Blocked -> {
+                    // 무시: 아무것도 보내지 않고 소리로만 알린다
+                    chime.ding()
+                    showNotice("보낼 수 없는 말이라 전송하지 않았어요.")
+                }
                 VoiceIntentResolver.Result.NoMessage -> {
+                    chime.ding()
                     showNotice("보낼 수 있는 말 중에 맞는 게 없어요: \"$spoken\"")
-                    voice.speak("보낼 수 있는 말 중에 맞는 게 없어요")
                 }
                 is VoiceIntentResolver.Result.NoCarAt -> {
                     showNotice("${result.position.cell} 방향에는 Car-ind CHAT 차가 없어요.")

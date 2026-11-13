@@ -2,7 +2,7 @@ package com.roadtalk.app.chat
 
 /**
  * 운전자가 한 말에서 단어를 찾아 [PresetMessages] 중 하나를 고른다.
- * Claude(서버의 음성 명령 해석)를 쓸 수 없을 때의 대비책이라, 흔한 표현만 알아듣는다.
+ * AI(서버의 Jev 해석)를 쓸 수 없을 때의 대비책이라, 흔한 표현만 알아듣는다.
  */
 object PresetMatcher {
 

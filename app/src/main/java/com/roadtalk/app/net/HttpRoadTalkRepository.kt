@@ -31,7 +31,7 @@ import java.net.URLEncoder
  *  GET  /v1/nearby?plate=&lat=&lng=&radius=  근처 차량 (근처에 차가 있으면 0.3초마다, 없으면 1초마다) → 칼만 필터로 추적해 화면에는 0.1초마다 갱신
  *  POST /v1/messages                         메시지 전송 (서버가 2차 욕설 필터, 차단 시 422)
  *  GET  /v1/messages?to=&after=              받은 메시지 (1.5초마다, after=cursor 로 중복 없이)
- *  POST /v1/interpret                        음성 명령 해석 (서버가 Claude API 로: 누구에게 · 정해진 메시지 중 무엇을)
+ *  POST /v1/interpret                        음성 명령 해석 (서버가 TypeSafe AI 의 Jev 로: 누구에게 · 정해진 메시지 중 무엇을 · 무시할 말인지)
  */
 class HttpRoadTalkRepository(
     baseUrl: String,
@@ -177,8 +177,10 @@ class HttpRoadTalkRepository(
             )
             val target = if (res.isNull("target")) null else runCatching { RelativePosition.valueOf(res.getString("target")) }.getOrNull()
             val index = if (res.isNull("messageIndex")) null else res.getInt("messageIndex").takeIf { it in presets.indices }
-            Log.d(TAG, "interpret \"$spoken\" -> target=$target message=$index (${res.optString("model")}, ${res.optLong("ms")}ms)")
-            VoiceIntent(target, index)
+            val blocked = res.optBoolean("blocked", false)
+            val score = res.optDouble("score").takeUnless { it.isNaN() }?.toFloat()
+            Log.d(TAG, "interpret \"$spoken\" -> target=$target message=$index blocked=$blocked score=$score (${res.optString("model")}, ${res.optLong("ms")}ms)")
+            VoiceIntent(target, index, blocked, score)
         } catch (e: Exception) {
             // 서버에 AI 가 꺼져 있거나(503) 늦으면 조용히 포기한다 → 앱이 단어 매칭으로 대신
             Log.i(TAG, "interpret unavailable: ${e.message}")
@@ -276,6 +278,13 @@ class HttpRoadTalkRepository(
             cursor = 0
         }
         val res = request("GET", "/v1/messages?to=${enc(plate)}&after=$cursor")
+        // 서버가 알려 준 번호가 내가 본 번호보다 작으면 서버가 재시작돼 번호를 처음부터 다시 센 것이다.
+        // 그대로 두면 새 메시지를 전부 놓치므로 처음부터 다시 받는다 (서버는 최근 60초 메시지만 갖고 있다)
+        if (res.optLong("cursor", cursor) < cursor) {
+            Log.i(TAG, "server message ids restarted, resetting cursor")
+            cursor = 0
+            return
+        }
         val list = res.getJSONArray("messages")
         for (i in 0 until list.length()) {
             val m = list.getJSONObject(i)
@@ -339,8 +348,8 @@ class HttpRoadTalkRepository(
         const val NEARBY_SLOW_MILLIS = 1_000L
         /** 위치 변화가 없어도 이 간격마다 presence 갱신 (서버 TTL 30초보다 충분히 짧게) */
         const val KEEPALIVE_MILLIS = 5_000L
-        /** 음성 명령 해석을 기다리는 한도 (서버가 Claude 를 6초까지 기다린다) */
-        const val INTERPRET_TIMEOUT_MILLIS = 8_000
+        /** 음성 명령 해석을 기다리는 한도 (서버가 Jev 를 4초씩 최대 두 번 기다린다) */
+        const val INTERPRET_TIMEOUT_MILLIS = 10_000
         // 내가 보낸 메시지(System.nanoTime id)와 겹치지 않게
         const val SERVER_ID_BASE = 7_000_000_000_000_000_000L
     }

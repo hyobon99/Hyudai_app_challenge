@@ -89,8 +89,8 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     voice = voice,
                     onSelectCar = vm::select,
                     onSelectDirection = vm::selectDirection,
-                    onSend = { plate, text -> vm.sendTo(plate, text) },
-                    onMic = vm::toggleListening,
+                    onTalkStart = vm::startTalking,
+                    onTalkEnd = vm::stopTalking,
                     modifier = Modifier
                         .weight(0.42f)
                         .fillMaxHeight(),

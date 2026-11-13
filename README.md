@@ -115,68 +115,69 @@ Firestore 구조: `presence/{번호}` (위치·geohash, 5초마다 갱신), `inb
 ---
 
 ## 화면 구성
-- 왼쪽: 위에서 본 도로 (`ui/BirdEyeView.kt`). Car-ind CHAT을 켠 차만 GPS 상대 위치에 표시. 파란 테두리가 있는 차는 '지금 선택된 차'(탭하거나 메시지를 보낸 차, 처음에는 가장 가까운 차)로, 🎤 음성 메시지를 받는 차다. **차를 누른 채 끌면 메시지 7개가 정칠각형으로 뜨고, 원하는 쪽으로 끌었다 놓으면** 그 방향의 메시지가 그 차에게 전송된다 (`RADIAL_MESSAGES`에서 문구 변경)
+- 왼쪽: 위에서 본 도로 (`ui/BirdEyeView.kt`). Car-ind CHAT을 켠 차만 GPS 상대 위치에 표시. 차를 누르면 그 차가 받는 사람으로 선택된다(파란 테두리, 처음에는 가장 가까운 차)
+- 도로 아래: **꾹 누르고 말하기 버튼.** 누르고 있는 동안 듣고, 손을 떼면 그 말이 정해진 인사 중 가장 가까운 것으로 바뀌어 전송된다 (아래 "말로 보내기")
 - 메시지는 차 위에 큰 말풍선(글자 60sp)으로 뜨고, 받은 메시지는 **TextToSpeech SDK**로 읽어 준다 (예: "앞차가 보낸 메시지. 양보 감사해요", 그림 문자는 빼고 읽음 · `chat/SpeechText.kt`)
 - 가운데: 내비게이션 (`ui/NavPanel.kt`). 지도는 OpenStreetMap 타일(osmdroid), 내 위치 중심·진행 방향이 위. 지도 데이터 © OpenStreetMap contributors
   - 그 위에 **NaviHelper SDK**(`navi/NaviGateway.kt`)로 받은 순정 내비 정보를 표시: 다음 회전, 목적지, 남은 거리·시간, 제한속도
   - 지도를 길게 누르면 그 위치로 순정 내비에 경로 안내를 요청, 안내 카드의 "안내 종료"로 취소
 
-## 음성으로 보내기 (SpeechToText SDK)
-- 🎤 버튼을 누르고 말하면 **Pleos SpeechToText SDK**가 글자로 바꾸고, 앱이 "누구에게 / 무슨 말"로 나눠 보낸다 (`voice/VoiceGateway.kt`, `chat/VoiceCommandParser.kt`)
-  - 보낼 수 있는 말은 방향 메뉴와 같은 **정해진 7개**뿐이다 (감사합니다 · 양보 감사해요 · 먼저 가세요 · 조심히 가세요 · 죄송합니다 · 괜찮아요 · 안녕하세요) (`chat/PresetMessages.kt`). 자유롭게 말하면 그중 뜻이 가장 가까운 것으로 바뀌어 간다
+## 말로 보내기 (SpeechToText SDK → Jev → TextToSpeech SDK)
+전체 흐름:
+
+1. **버튼을 꾹 누르고 말한다.** 누르면 STT SDK의 `request()`, 손을 떼면 `stop()` (`voice/VoiceGateway.kt`)
+2. **Pleos SpeechToText SDK**가 말을 글자로 바꾼다. 손을 뗄 때까지 들은 말이 결과가 된다
+3. 앱의 금칙어 사전(`chat/ProfanityFilter.kt`)에 걸리면 **무시하고 '띵~' 소리**만 낸다 (`voice/Chime.kt`). 서버에 묻지도 않는다
+4. 서버가 **TypeSafe AI의 Jev 모델**에게 묻는다 (`server/voice_ai.py`): 정해진 7개 중 뜻이 가장 가까운 말(문구별 확률 = 일치도), 맞는 말이 있기는 한지, 욕설·위협·위험한 말인지, 어느 방향의 차에게 하는 말인지
+5. 욕설·위험한 말이거나 일치도가 높은 말이 없으면 **보내지 않고 '띵~'** 소리. 일치도가 높은 말이 있으면 그 차에게 전송하고 "뒷차에게 감사합니다 보냈어요"라고 읽어 준다
+6. 받는 차에서는 큰 말풍선과 함께 **TextToSpeech SDK**가 읽어 준다
+
+- 보낼 수 있는 말은 **정해진 7개**뿐이다 (`chat/PresetMessages.kt`): 감사합니다 · 양보 감사해요 · 먼저 가세요 · 조심히 가세요 · 죄송합니다 · 괜찮아요 · 안녕하세요
   - "뒷차한테 땡큐 보내줘" → 뒷차에게 "감사합니다 🙏" · "뒷차한테 미안하다고 보내줘" → 뒷차에게 "죄송합니다 🙇" · "12가 3456한테 먼저 가라고 해줘" · 대상을 안 말하면 지금 선택된 차(파란 테두리)
-  - 보낸 뒤에는 "뒷차에게 감사합니다 보냈어요"라고 읽어 준다. 맞는 말이 없으면 보내지 않고 알려 준다
-- 공식 가이드(SpeechToText → Programming Guide) 순서 그대로다: 권한 `pleos.car.permission.STT_SERVICE` → `SpeechToText(context, Mode.ON_DEVICE)` → `initialize(listener)` → `addListener` · `setLocale(Locale.KOREA)` → `request()` / `stop()` → 끝낼 때 `removeListener` · `release()`
+- STT는 공식 가이드(SpeechToText → Programming Guide) 순서 그대로다: 권한 `pleos.car.permission.STT_SERVICE` → `SpeechToText(context, Mode.ON_DEVICE)` → `initialize(listener)` → `addListener` · `setLocale(Locale.KOREA)` → `request()` / `stop()` → 끝낼 때 `removeListener` · `release()`
   - `ON_DEVICE` 모드라 앱 등록(My Project의 clientId/secret)이 필요 없다. 서버 인식을 쓰려면 `HYBRID` + `registerApp()`
-  - 핸들의 음성 버튼은 Gleo 전용이라 앱에서 쓸 수 없다 → 앱 안의 🎤 버튼으로 시작
-- **마이크 없는 PC에서 시험하기 (디버그 빌드 전용)**: SDK의 "Sending audio data"(`sendAudio` → `completeAudioSend`, 16kHz·16bit·mono PCM)로 음성 파일을 넣어 본다. 마이크만 빼고 실제와 같은 길을 탄다
+  - 핸들의 음성 버튼은 Gleo 전용이라 앱에서 쓸 수 없다 → 화면의 말하기 버튼으로 시작
+
+### Jev (TypeSafe AI) 설정
+Jev는 글을 쓰지 않고, 물어본 질문마다 "선택지 중 하나 + 확률"만 돌려주는 모델이다 (문서: https://docs.typesafe.ai). 그래서 정해진 7개 밖의 말은 나올 수 없다.
+
+- 서버가 Jev를 부른다 (`POST /v1/interpret`, 규격은 `docs/SERVER_API.md`). **API 키는 서버 PC에만 둔다.** 앱(APK)이나 GitHub에는 넣지 않는다
+- 받아들이는 기준은 `server/voice_ai.py` 위쪽의 숫자로 조절한다: 고른 문구의 확률 0.5 이상(`MATCH_AT`), "맞는 문구가 있다" 0.5 이상(`FITS_AT`), "욕설·위험한 말이다" 0.5 이상이면 무시(`HARMFUL_AT`)
+- 키가 없거나, 인터넷이 안 되거나, 답이 늦으면 앱이 **단어 매칭**(`chat/PresetMatcher.kt`)으로 대신한다. 흔한 표현(감사·고마워·땡큐, 미안·죄송, 먼저 가, 조심히, 괜찮, 안녕, 양보)은 키 없이도 된다. 욕설은 앱의 금칙어 사전으로 걸러진다
+
+켜는 방법 (서버를 돌리는 PC에서 한 번만):
 
 ```
-adb -s emulator-5556 shell am broadcast --user 10 -a com.roadtalk.app.STT_TEST --es stt_test front_thanks
-adb -s emulator-5556 logcat -s RoadTalkVoice
+pip install typesafe-sdk
+setx TYPESAFE_API_KEY "여기에_발급받은_키"
 ```
 
-  - 음성 파일은 `app/src/debug/assets/stt_test/` 에 있다: `front_thanks`(앞차에게 감사합니다), `rear_go_first`(뒷차에게 먼저 가세요), `sorry`(죄송합니다), `rear_thankyou`, `rear_sorry`, `front_yield_thanks`. Windows 한국어 음성(Heami)으로 만든 것
-  - 확인한 결과(에뮬레이터 v2.1.0): 문장이 그대로 인식됐고(뒷차는 "뒤차"로 적힘), "뒤차한테 땡큐 보내줘" → 뒷차에게 "감사합니다 🙏", "뒤차한테 미안하다고 보내줘" → 뒷차에게 "죄송합니다 🙇", "앞차한테 양보해줘서 고맙다고 전해줘" → 앞차에게 "양보 감사해요"가 전송됐다. 실제 마이크로 말하는 것은 마이크가 있는 PC나 차량에서 따로 확인해야 한다
-
-## 자유로운 말 알아듣기 (Claude API, 선택 사항)
-Gleo 가 하는 일(말을 알아듣고 앱 기능을 골라 부르기)을 Claude API 로 대신한다. 흐름: 🎤 → STT SDK(말 → 글자) → **우리 서버** → Claude(누구에게 · 7개 중 무엇을) → 앱이 전송.
-
-- 서버 코드: `server/voice_ai.py`, `POST /v1/interpret` (규격은 `docs/SERVER_API.md`). 앱은 `net/HttpRoadTalkRepository.interpret()` → `chat/VoiceIntentResolver.kt`
-- Claude 는 JSON 스키마(enum)로 답하게 해서 **정해진 7개 밖의 말은 나올 수 없다.** 뜻이 맞는 게 없으면 "없음"을 고르고, 앱은 보내지 않는다
-- **API 키는 서버 PC 에만 둔다.** 앱(APK)이나 GitHub 에는 넣지 않는다
-- 키가 없거나, 인터넷이 안 되거나, 6초 안에 답이 없으면 앱이 **단어 매칭**(`chat/PresetMatcher.kt`)으로 대신한다. 흔한 표현(감사·고마워·땡큐, 미안·죄송, 먼저 가, 조심히, 괜찮, 안녕, 양보)은 키 없이도 된다
-
-켜는 방법 (서버를 돌리는 PC 에서 한 번만):
-
-```
-pip install anthropic
-setx ANTHROPIC_API_KEY "여기에_발급받은_키"
-```
-
-1. 키는 https://console.anthropic.com → API Keys 에서 만든다 (결제 수단 등록 필요)
+1. 키는 https://console.typesafe.ai/keys 에서 만든다
 2. `setx` 뒤에 서버를 다시 켤 필요는 없다 (서버가 사용자 환경 변수를 직접 읽는다)
-3. 확인: 브라우저에서 `http://127.0.0.1:8090/health` → `"ai": "ready"` 면 켜진 것 (`no_key` = 키 없음, `no_sdk` = `pip install anthropic` 필요)
+3. 확인: 브라우저에서 `http://127.0.0.1:8090/health` → `"ai": "ready"` 면 켜진 것 (`no_key` = 키 없음, `no_sdk` = `pip install typesafe-sdk` 필요)
+4. 모델은 기본 `jev-latest`. 바꾸려면 `setx TYPESAFE_DEFAULT_MODEL 모델이름` 뒤 서버를 다시 켠다
 
-모델과 비용:
-- 기본 모델은 가장 빠르고 싼 **Claude Haiku 5.5** (`claude-haiku-5-5`, 입력 100만 토큰당 $0.10 · 출력 $0.50). 명령 한 번이 입력 약 700토큰 · 출력 약 20토큰이라 **한 번에 약 0.1원**, 1만 번에 약 1,100원 수준이다
-- 다른 모델을 쓰려면 `setx CARIND_CLAUDE_MODEL claude-sonnet-5-5` (또는 `claude-opus-5-5`) 뒤 서버를 다시 켠다. 짧은 분류 작업이라 Haiku 로 충분하다
-- 아직 확인하지 못한 것: 이 PC 에 키가 없어서 **실제 Claude 호출은 돌려 보지 못했다** (가짜 응답으로 결과 처리만 확인). 키를 넣은 뒤 아래 시험 명령으로 확인할 것
+실제 Jev로 확인한 결과(2026-11-13): `tools/voice_ai_test.py` 의 문장 21개가 모두 기대대로 나왔고, 응답 시간 중앙값은 약 0.17초였다. 아직 확인하지 못한 것: 실제 마이크로 말한 경우와, '띵' 소리·TTS가 스피커로 들리는지 (에뮬레이터에서는 음성 파일·글자 주입과 로그로만 확인).
 
-시험 (디버그 빌드, 마이크 없이): 음성 파일 `rear_thankyou`(뒷차한테 땡큐 보내줘) · `rear_sorry`(뒷차한테 미안하다고 보내줘) · `front_yield_thanks`(앞차한테 양보해줘서 고맙다고 전해줘)
+### 마이크 없이 시험하기 (디버그 빌드 전용)
+STT SDK의 "Sending audio data"(`sendAudio` → `completeAudioSend`, 16kHz·16bit·mono PCM)로 음성 파일을 넣어 본다. 마이크만 빼고 실제와 같은 길을 탄다.
 
 ```
 adb -s emulator-5556 shell am broadcast --user 10 -a com.roadtalk.app.STT_TEST --es stt_test rear_thankyou
 adb -s emulator-5556 logcat -s RoadTalkVoice RoadTalkHttp
 ```
 
-`RoadTalkHttp: interpret "…" -> target=REAR message=0 (claude-haiku-5-5, …ms)` 가 찍히면 Claude 가 해석한 것이고, `interpret unavailable` 이면 단어 매칭으로 처리된 것이다.
+- 음성 파일(`app/src/debug/assets/stt_test/`, Windows 한국어 음성으로 만든 것): `rear_thankyou`(뒷차한테 땡큐 보내줘) · `rear_sorry`(뒷차한테 미안하다고 보내줘) · `front_yield_thanks`(앞차한테 양보해줘서 고맙다고 전해줘) · `front_thanks` · `rear_go_first` · `sorry` · `rude_front`(욕설이 든 말) · `unrelated`(오늘 저녁에 뭐 먹을까)
+- 글자를 바로 넣어 보기(STT 건너뜀): `... -a com.roadtalk.app.STT_TEST --es say "뒷차한테 고맙다고 해줘"`
+- 로그 읽는 법: `interpret "…" -> target=REAR message=0 blocked=false score=0.91 (jev-…)` 는 Jev가 고른 것, `interpret unavailable` 은 단어 매칭으로 처리된 것, `ding` 은 보내지 않고 소리만 낸 것
+- 확인한 결과(에뮬레이터 v2.1.0, 실제 Jev): "뒤차한테 땡큐 보내줘" → 뒷차에게 "감사합니다 🙏", "앞차한테 양보해줘서 고맙다고 전해줘" → 앞차에게 "양보 감사해요", "뒤에 오는 차 먼저 보내드려" → 뒷차에게 "먼저 가세요", 욕설이 든 말과 욕설 없는 비난·위협 → 전송 없이 `ding`, "오늘 저녁에 뭐 먹을까?" → 전송 없이 `ding`. "뒤에 오는 차…" 를 뺀 나머지는 Jev 키가 없을 때의 단어 매칭 경로로도 확인했다. 말하기 버튼을 누르면 STT `request`, 떼면 `stop` 이 불리는 것도 확인했다
+- 확인하지 못한 것: 실제 마이크로 말하기(이 PC의 에뮬레이터는 마이크를 못 잡는다), '띵' 소리가 스피커로 들리는지(소리를 내는 코드가 실행된 것까지만 확인), 앱을 켠 직후 첫 번째 인식이 가끔 결과 없이 끝나는 현상(에뮬레이터에서 두 번 봄)
 
 ## 주행 시나리오 시연 영상 만들기
 "실제 도로에서 차들이 이렇게 움직일 때, 각 차의 Car-ind CHAT 화면에는 이렇게 보이고 이렇게 메시지를 보낸다"를 한 화면에 담는 도구 (`tools/scenario/run_scenario.py`).
 
 - 왼쪽: 위에서 본 실제 상황 (스크립트가 그림. 앱 없는 차·공사 구간도 보임) / 오른쪽: 두 에뮬레이터의 **실제 앱 화면 녹화**
-- 앱 화면은 꾸민 것이 아니다. 스크립트가 시나리오의 차 위치를 두 에뮬레이터의 GPS에 초당 10번 넣어 주고(`geo fix`. 더 촘촘히 넣으면 에뮬레이터의 위치 서비스가 멈춘 적이 있다), 앱은 평소처럼 FusedLocation SDK → 서버 → 상대 위치 벡터로 그린다. 메시지도 에뮬레이터 화면에서 실제로 "차를 누른 채 끌기"를 해서 보낸다
+- 앱 화면은 꾸민 것이 아니다. 스크립트가 시나리오의 차 위치를 두 에뮬레이터의 GPS에 초당 10번 넣어 주고(`geo fix`. 더 촘촘히 넣으면 에뮬레이터의 위치 서비스가 멈춘 적이 있다), 앱은 평소처럼 FusedLocation SDK → 서버 → 상대 위치 벡터로 그린다. 메시지는 앱의 음성 명령 경로로 보낸다 ("이렇게 말했다"는 글자를 앱에 넣어 주면 앱이 정해진 인사 중 가장 가까운 말을 골라 보낸다. 마이크 인식 단계만 건너뛴다)
 - 준비: 서버 실행, 에뮬레이터 2대에 Car-ind CHAT 실행(번호 `99허 0000` / `12가 3690`, 서버 주소 `10.0.2.2:8090`), `pip install pillow`, ffmpeg
 
 ```
