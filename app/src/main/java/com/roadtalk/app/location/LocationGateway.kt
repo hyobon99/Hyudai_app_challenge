@@ -26,6 +26,8 @@ class LocationGateway(context: Context) {
         val accuracyMeters: Float?,
         /** 직전 위치와 비교해 계산한 속도. 첫 위치이거나 10초 넘게 끊겼으면 null */
         val speedMps: Float?,
+        /** heading 을 믿을 수 있는지. 앱을 켠 뒤 한 번도 움직이지 않았으면 방향을 알 길이 없어 false (그때 heading 은 0) */
+        val headingKnown: Boolean = true,
     )
 
     private val fusedLocation = FusedLocation(context.applicationContext)
@@ -41,13 +43,15 @@ class LocationGateway(context: Context) {
             lastCallbackAt = System.currentTimeMillis()
             Log.d(TAG, "fix ts=${location.timestampMillis} conf=${location.confidence} heading=${location.heading}")
             val prev = _location.value
+            val (heading, headingKnown) = headingFrom(prev, location)
             _location.value = Fix(
                 latitude = location.latitude,
                 longitude = location.longitude,
-                heading = headingFrom(prev, location),
+                heading = heading,
                 timestampMillis = location.timestampMillis,
                 accuracyMeters = location.confidence.takeIf { it > 0f },
                 speedMps = speedFrom(prev, location),
+                headingKnown = headingKnown,
             )
         }
 
@@ -60,13 +64,14 @@ class LocationGateway(context: Context) {
      * 진행 방향. SDK 값이 있으면 그대로 쓴다.
      * Pleos 에뮬레이터는 위치를 옮겨도 heading 이 항상 0 으로 와서, 그럴 때는 직전 위치에서 지금 위치로의 방위각(이동 방향)을 쓴다.
      * 거의 안 움직였으면(1m 미만) GPS 흔들림일 수 있어 직전 방향을 유지한다.
+     * 돌려주는 값: (방향, 그 방향을 믿을 수 있는지). 아직 한 번도 움직이지 않았으면 (0, false)
      */
-    private fun headingFrom(prev: Fix?, now: LocationData): Float {
-        if (now.heading != 0f) return now.heading
-        prev ?: return 0f
+    private fun headingFrom(prev: Fix?, now: LocationData): Pair<Float, Boolean> {
+        if (now.heading != 0f) return now.heading to true
+        prev ?: return 0f to false
         val result = FloatArray(2)
         Location.distanceBetween(prev.latitude, prev.longitude, now.latitude, now.longitude, result)
-        return if (result[0] < 1f) prev.heading else (result[1] + 360f) % 360f
+        return if (result[0] < 1f) prev.heading to prev.headingKnown else (result[1] + 360f) % 360f to true
     }
 
     /** SDK 가 속도를 주지 않아서 직전 위치와의 거리 ÷ 시간으로 계산한다 */

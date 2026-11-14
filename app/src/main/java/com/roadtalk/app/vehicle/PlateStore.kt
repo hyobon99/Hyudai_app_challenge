@@ -31,8 +31,16 @@ class PlateStore(context: Context) {
         prefs.edit().putInt(KEY_TYPE, type).apply()
     }
 
+    /** 기본 메시지 함에 넣어 둔 말들 (줄바꿈으로 이어 저장). 아직 바꾼 적이 없으면 null */
+    fun loadMessages(): List<String>? = prefs.getString(KEY_MESSAGES, null)?.split('\n')
+
+    fun saveMessages(messages: List<String>) {
+        prefs.edit().putString(KEY_MESSAGES, messages.joinToString("\n")).apply()
+    }
+
     companion object {
         private const val KEY = "my_plate"
+        private const val KEY_MESSAGES = "my_messages"
         private const val KEY_TYPE = "my_car_type"
         private const val KEY_SKIN = "my_skin"
         private val PLATE_REGEX = Regex("""(\d{2,3})\s*([가-힣])\s*(\d{4})""")

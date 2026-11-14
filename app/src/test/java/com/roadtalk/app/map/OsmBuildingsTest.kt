@@ -70,7 +70,7 @@ class OsmBuildingsTest {
         assertTrue(q.contains("around:320,37.499,127.031"))
         assertTrue(q.contains("\"building\""))
         assertTrue(q.contains("\"highway\""))
-        assertTrue(q.contains("\"crossing\""))
+        assertTrue(q.contains("crossing|traffic_signals"))
     }
 
     // ---- 건물을 3D 로 세우기
@@ -110,29 +110,34 @@ class OsmBuildingsTest {
         assertEquals(300f, area, 0.01f)
     }
 
-    // ---- 도로와 횡단보도
+    // ---- 도로 · 횡단보도 · 신호등
 
     @Test
-    fun roadWidthComesFromLanesOrTheRoadClass() {
-        assertEquals(4 * 3.3f, OsmRoads.widthOf("primary", "4"), 0.01f)
-        assertEquals(13f, OsmRoads.widthOf("primary", null), 0.01f)
-        assertEquals(6.5f, OsmRoads.widthOf("residential", ""), 0.01f)
-        assertTrue(OsmRoads.widthOf("tertiary", "abc") > OsmRoads.widthOf("living_street", null))
+    fun laneCountComesFromTheMapOrTheRoadClass() {
+        assertEquals(5, OsmRoads.lanesOf("primary", "5", oneway = true))
+        assertEquals(8, OsmRoads.lanesOf("primary", " 8 ", oneway = false))
+        // 지도에 차로 수가 없으면 등급으로 어림한다: 큰길 양방향 6 (한쪽만이면 3), 골목 양방향 2 (일방통행이면 1)
+        assertEquals(6, OsmRoads.lanesOf("primary", null, oneway = false))
+        assertEquals(3, OsmRoads.lanesOf("primary", "", oneway = true))
+        assertEquals(2, OsmRoads.lanesOf("residential", null, oneway = false))
+        assertEquals(1, OsmRoads.lanesOf("residential", "abc", oneway = true))
+        assertEquals(1, OsmRoads.lanesOf("primary_link", null, oneway = true))
+        assertEquals(4 * 3.3f, OsmRoads.widthOf(4), 0.01f)
         assertTrue(OsmRoads.isDrivable("residential"))
         assertTrue(!OsmRoads.isDrivable("footway") && !OsmRoads.isDrivable("service") && !OsmRoads.isDrivable(null))
     }
 
     @Test
     fun crossingTakesTheDirectionAndWidthOfTheNearestRoad() {
-        val eastWest = OsmRoads.Road(1, floatArrayOf(-50f, 0f, 50f, 0f), 13f)       // 동서로 뻗은 큰길
-        val northSouth = OsmRoads.Road(2, floatArrayOf(30f, -50f, 30f, 50f), 6.5f)  // 남북으로 뻗은 골목
-        val onBigRoad = OsmRoads.crossingAt(10f, 1f, listOf(eastWest, northSouth))!!
+        val eastWest = OsmRoads.Road(1, floatArrayOf(-50f, 0f, 50f, 0f), 4, true, 13.2f)        // 동서로 뻗은 큰길
+        val northSouth = OsmRoads.Road(2, floatArrayOf(30f, -50f, 30f, 50f), 2, false, 6.6f)   // 남북으로 뻗은 골목
+        val onBigRoad = OsmRoads.spotAt(10f, 1f, listOf(eastWest, northSouth))!!
         assertEquals(90f, onBigRoad.bearingDeg, 0.01f)
-        assertEquals(13f, onBigRoad.roadWidth, 0.01f)
-        val onAlley = OsmRoads.crossingAt(31f, 20f, listOf(eastWest, northSouth))!!
+        assertEquals(13.2f, onBigRoad.roadWidth, 0.01f)
+        val onAlley = OsmRoads.spotAt(31f, 20f, listOf(eastWest, northSouth))!!
         assertEquals(0f, onAlley.bearingDeg, 0.01f)
-        assertEquals(6.5f, onAlley.roadWidth, 0.01f)
+        assertEquals(6.6f, onAlley.roadWidth, 0.01f)
         // 도로에서 멀리 떨어진 것은 그리지 않는다
-        assertNull(OsmRoads.crossingAt(-40f, 40f, listOf(eastWest, northSouth)))
+        assertNull(OsmRoads.spotAt(-40f, 40f, listOf(eastWest, northSouth)))
     }
 }

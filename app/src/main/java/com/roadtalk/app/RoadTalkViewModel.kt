@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.roadtalk.app.chat.ProfanityFilter
-import com.roadtalk.app.chat.PresetMessages
+import com.roadtalk.app.chat.MessageCatalog
 import com.roadtalk.app.chat.SpeechText
 import com.roadtalk.app.chat.VoiceCommandParser
 import com.roadtalk.app.chat.VoiceIntentResolver
@@ -17,6 +17,7 @@ import com.roadtalk.app.net.ServerStore
 import com.roadtalk.app.map.BuildingsSource
 import com.roadtalk.app.net.Perception
 import com.roadtalk.app.map.OsmBuildings
+import com.roadtalk.app.map.OsmRoads
 import com.roadtalk.app.ui.scene3d.CarLook
 import com.roadtalk.app.vehicle.PlateStore
 import com.roadtalk.app.net.MyPosition
@@ -85,9 +86,6 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     private val _sent = MutableStateFlow<RoadMessage?>(null)
     val sent: StateFlow<RoadMessage?> = _sent.asStateFlow()
 
-    /** 지도 패널용 내 위치 */
-    val myLocation: StateFlow<LocationGateway.Fix?> get() = location.location
-
     /** 우선순위: 사용자가 등록한 번호 > SDK 가 준 번호 > 임시 번호 */
     private val _myPlate = MutableStateFlow(plateStore.load() ?: FALLBACK_PLATE)
     val myPlate: StateFlow<String> = _myPlate.asStateFlow()
@@ -97,7 +95,7 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     val mySkin: StateFlow<Int> = _mySkin.asStateFlow()
 
     /** 내 차종 (0~9). 고르지 않았으면 차량번호로 정해진 차종 */
-    private val _myCarType = MutableStateFlow(plateStore.loadType() ?: CarLook.typeOf(_myPlate.value))
+    private val _myCarType = MutableStateFlow(plateStore.loadType()?.takeIf { it in CarLook.GARAGE_TYPES } ?: CarLook.typeOf(_myPlate.value))
     val myCarType: StateFlow<Int> = _myCarType.asStateFlow()
 
     /** 지도에서 받아 온 내 주변 건물 (3D 화면에 세운다). 아직 못 받았으면 null */
@@ -106,12 +104,38 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
     val buildings: StateFlow<OsmBuildings.Area?> = buildingsSource.area
 
+    /**
+     * 내 위치와 방향. 앱을 켠 뒤 한 번도 움직이지 않아 방향을 모를 때는, 지도에서 가장 가까운 도로가 뻗은 방향을 내 방향으로 본다
+     * (북쪽을 본다고 치면 실제 길과 어긋나서 도로와 횡단보도가 비스듬히 그려진다). 움직이기 시작하면 실제 이동 방향을 쓴다.
+     */
+    val myLocation: StateFlow<LocationGateway.Fix?> =
+        combine(location.location, buildings) { fix, area -> alongNearestRoad(fix, area) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    private fun alongNearestRoad(fix: LocationGateway.Fix?, area: OsmBuildings.Area?): LocationGateway.Fix? {
+        if (fix == null || fix.headingKnown || area == null) return fix
+        val bearing = OsmRoads.bearingAt(
+            OsmBuildings.east(fix.longitude, area.originLat, area.originLng),
+            OsmBuildings.north(fix.latitude, area.originLat),
+            area.roads,
+        ) ?: return fix
+        return fix.copy(heading = bearing)
+    }
+
     /** 지도에 지금 보이는 범위 (내 위치에서 지도 구석까지, m). 이 안의 차를 모두 찾도록 검색 반경으로 쓴다 */
     private val _mapRadius = MutableStateFlow(MIN_SEARCH_RADIUS_M)
 
     /** '내 차 고르기' 화면이 열려 있는지 (열리면 오른쪽 지도 자리에 뜬다) */
     private val _garageOpen = MutableStateFlow(false)
     val garageOpen: StateFlow<Boolean> = _garageOpen.asStateFlow()
+
+    /** 기본 메시지 함: 음성으로 말하면 이 6개 중 뜻이 가장 가까운 것이 전송된다 ([MessageCatalog]) */
+    private val _messageSlots = MutableStateFlow(MessageCatalog.sanitize(plateStore.loadMessages()))
+    val messageSlots: StateFlow<List<String>> = _messageSlots.asStateFlow()
+
+    /** '메시지 함' 화면이 열려 있는지 (열리면 오른쪽 지도 자리에 뜬다) */
+    private val _messagesOpen = MutableStateFlow(false)
+    val messagesOpen: StateFlow<Boolean> = _messagesOpen.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -145,7 +169,7 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
-            combine(_repository, _myPlate, location.location) { repo, plate, fix -> Triple(repo, plate, fix) }
+            combine(_repository, _myPlate, myLocation) { repo, plate, fix -> Triple(repo, plate, fix) }
                 .collect { (repo, plate, fix) ->
                     val position = fix?.let {
                         MyPosition(it.latitude, it.longitude, it.heading, it.speedMps, it.timestampMillis, it.accuracyMeters)
@@ -189,7 +213,25 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun openGarage() {
+        _messagesOpen.value = false
         _garageOpen.value = true
+    }
+
+    fun openMessages() {
+        _garageOpen.value = false
+        _messagesOpen.value = true
+    }
+
+    fun closeMessages() {
+        _messagesOpen.value = false
+    }
+
+    /** 기본 메시지 함의 slot 번 칸에 message 를 놓는다 (이미 다른 칸에 있는 말이면 두 칸을 맞바꾼다) */
+    fun setMessageSlot(slot: Int, message: String) {
+        val next = MessageCatalog.assign(_messageSlots.value, slot, message)
+        if (next == _messageSlots.value) return
+        plateStore.saveMessages(next)
+        _messageSlots.value = next
     }
 
     fun closeGarage() {
@@ -228,11 +270,10 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         _selectedPlate.value = plate
     }
 
-    /** 3x3 칸을 누르면 그 방향에서 가장 가까운 차를 받는 사람으로 */
+    /** 빈 도로를 누르면 그 방향에서 가장 가까운 차를 받는 사람으로. 그 방향에 차가 없으면 아무 일도 없다 (안내 문구도 띄우지 않는다) */
     fun selectDirection(position: RelativePosition) {
-        val car = nearbyCars.value.filter { it.position == position }.minByOrNull { it.distanceMeters }
-        if (car == null) showNotice("${position.cell} 방향에는 Car-ind CHAT 차가 없어요.")
-        else _selectedPlate.value = car.plate
+        val car = nearbyCars.value.filter { it.position == position }.minByOrNull { it.distanceMeters } ?: return
+        _selectedPlate.value = car.plate
     }
 
     /** 지도에서 고른 위치로 순정 내비에 경로 안내를 요청한다 */
@@ -251,11 +292,13 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         return send(plate, text)
     }
 
-    /** 말하기 버튼을 누름: 듣기 시작 */
-    fun startTalking() = voice.startListening()
-
-    /** 말하기 버튼에서 손을 뗌: 듣기 끝 → 그때까지 들은 말이 [onVoiceResult] 로 온다 */
-    fun stopTalking() = voice.stopListening()
+    /**
+     * 말하기 버튼을 한 번 누름: 듣기 시작. 말을 멈추면 알아서 듣기를 끝내고(voice/Endpointer) 그때까지 들은 말이 [onVoiceResult] 로 온다.
+     * 듣는 중에 한 번 더 누르면 바로 끝낸다
+     */
+    fun toggleTalking() {
+        if (voice.state.value.listen == VoiceGateway.ListenState.IDLE) voice.startListening() else voice.stopListening()
+    }
 
     /** 에뮬레이터 마이크가 안 될 때 음성 명령 흐름을 시험하는 용도 */
     fun simulateVoice(spoken: String) = onVoiceResult(spoken)
@@ -282,9 +325,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 음성 인식 결과 처리. 보낼 수 있는 말은 정해진 7개([PresetMessages])뿐이다.
+     * 음성 인식 결과 처리. 보낼 수 있는 말은 기본 메시지 함의 6개([MessageCatalog])뿐이다.
      *  1) 비속어·위험한 말이면 무시하고 '띵' 소리만 낸다 (앱의 금칙어 사전, 그리고 서버의 AI 판단)
-     *  2) 서버의 AI(TypeSafe AI 의 Jev)가 7개 중 일치도가 가장 높은 말과 받을 차를 고른다. AI 를 쓸 수 없으면 단어 매칭으로 대신한다
+     *  2) 서버의 AI(TypeSafe AI 의 Jev)가 6개 중 일치도가 가장 높은 말과 받을 차를 고른다. AI 를 쓸 수 없으면 단어 매칭으로 대신한다
      *  3) 일치도가 높은 말이 있으면 그 차에게 보낸다 (받는 차에서는 TTS 로 읽어 준다)
      */
     private fun onVoiceResult(spoken: String) {
@@ -293,11 +336,12 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
             val selectedPlate = _selectedPlate.value
             val selected = cars.firstOrNull { it.plate == selectedPlate }
             val hasProfanity = filter.check(spoken).hasProfanity
+            val presets = _messageSlots.value
             // 금칙어가 있으면 서버에 묻지도 않는다
-            val ai = if (hasProfanity) null else _repository.value.interpret(spoken, PresetMessages.ALL, cars, selected?.position)
-            when (val result = VoiceIntentResolver.resolve(spoken, cars, selectedPlate, ai, hasProfanity)) {
+            val ai = if (hasProfanity) null else _repository.value.interpret(spoken, presets, cars, selected?.position)
+            when (val result = VoiceIntentResolver.resolve(spoken, cars, selectedPlate, ai, hasProfanity, presets)) {
                 is VoiceIntentResolver.Result.Send -> {
-                    val text = PresetMessages.ALL[result.messageIndex]
+                    val text = presets[result.messageIndex]
                     if (sendTo(result.car.plate, text)) {
                         // 화면을 보지 않아도 무엇이 보내졌는지 알 수 있게 읽어 준다
                         voice.speak(SpeechText.sent(result.car.position.label, text))

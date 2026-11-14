@@ -5,8 +5,9 @@ import kotlin.math.atan2
 import kotlin.math.hypot
 
 /**
- * '주변 차' 로 볼 범위. 차의 카메라가 방향마다 알아보는 거리와 같게 잡았다 (운전자가 화면에서 기대하는 '내 주변'):
- *   전방 협각 250m · 전방 메인 150m · 전방 광각 60m · 전측방 80m · 후측방 100m · 후방 50m
+ * '주변 차' 로 볼 범위. 차의 카메라가 방향마다 알아보는 거리를 바탕으로 잡았다 (운전자가 화면에서 기대하는 '내 주변'):
+ *   정면(좌우 약 17도) 180m · 정면 좌우 약 25도 100m · 앞 옆 80m · 뒤 옆 100m · 바로 뒤 50m
+ *   (카메라 표의 전방 협각 250m · 메인 150m 는 화면에 너무 멀리까지 나와서 180m · 100m 로 줄였다)
  * 실제 카메라를 쓰는 것은 아니고, 서버에서 받은 차 가운데 이 범위 안의 차만 주변 차로 보여 주고 메시지 대상으로 삼는다.
  */
 object Perception {
@@ -19,8 +20,8 @@ object Perception {
     fun rangeToward(forward: Float, lateral: Float): Float {
         val angle = Math.toDegrees(atan2(abs(lateral).toDouble(), forward.toDouble())).toFloat()   // 0 = 정면, 180 = 바로 뒤
         return when {
-            angle <= NARROW_HALF_DEG -> 250f
-            angle <= MAIN_HALF_DEG -> 150f
+            angle <= NARROW_HALF_DEG -> 180f
+            angle <= MAIN_HALF_DEG -> 100f
             angle <= FRONT_SIDE_UNTIL_DEG -> 80f
             angle <= REAR_SIDE_UNTIL_DEG -> 100f
             else -> 50f

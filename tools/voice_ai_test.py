@@ -11,25 +11,26 @@ import time
 import urllib.error
 import urllib.request
 
-MESSAGES = ["감사합니다 🙏", "양보 감사해요", "먼저 가세요", "조심히 가세요", "죄송합니다 🙇", "괜찮아요 👍", "안녕하세요 👋"]
-THANKS, YIELD_THANKS, GO, CARE, SORRY, OKAY, HELLO = MESSAGES
+# 앱의 기본 메시지 함 (chat/MessageCatalog.kt 의 DEFAULT_SLOTS). 운전자가 함을 바꾸면 앱은 바꾼 6개를 보낸다
+MESSAGES = ["감사합니다", "좋은 하루 보내세요", "죄송합니다", "먼저 가세요", "라이트 꺼져 있어요", "추월 가능합니다"]
+THANKS, GOOD_DAY, SORRY, GO, LIGHTS, PASS = MESSAGES
 NEARBY = ["FRONT", "REAR", "LEFT"]
 
 CASES = [
-    # 사용자가 든 예시
+    # 표현을 바꿔 말하기
     ("뒷차한테 땡큐 보내줘!", "REAR", THANKS, False),
     ("뒷차한테 미안하다고 보내줘", "REAR", SORRY, False),
-    # 표현을 바꿔 말하기
     ("앞차한테 고맙다고 좀 전해줘", "FRONT", THANKS, False),
-    ("방금 끼워줘서 고맙다고 해줘", None, YIELD_THANKS, False),
-    ("앞차한테 양보해줘서 고맙다고 전해줘", "FRONT", YIELD_THANKS, False),
+    ("방금 끼워줘서 고맙다고 해줘", None, THANKS, False),
     ("뒤에 오는 차 먼저 보내드려", "REAR", GO, False),
     ("제가 양보할게요 먼저 지나가세요", None, GO, False),
-    ("왼쪽 차한테 안전 운전하라고 해줘", "LEFT", CARE, False),
     ("앞차한테 쏘리라고 해", "FRONT", SORRY, False),
     ("아까 급하게 끼어들어서 미안해요", None, SORRY, False),
-    ("괜찮다고 신경 쓰지 말라고 전해줘", None, OKAY, False),
-    ("옆 차한테 인사 좀 해줘", "LEFT", HELLO, False),
+    ("옆 차한테 좋은 하루 되시라고 해줘", None, GOOD_DAY, False),      # '옆 차' 는 왼쪽인지 오른쪽인지 말하지 않아 방향은 따지지 않는다
+    ("앞차 전조등 꺼졌다고 알려줘", "FRONT", LIGHTS, False),
+    ("뒷차한테 라이트 안 켰다고 말해줘", "REAR", LIGHTS, False),
+    ("뒷차한테 추월해서 가도 된다고 해", "REAR", PASS, False),
+    ("뒤차 먼저 앞질러 가셔도 돼요", "REAR", PASS, False),
     # 음성 인식이 틀리게 적은 경우
     ("뒤차한테 땡큐 보내줘", "REAR", THANKS, False),
     ("뒷 차 한테 죄송 하다고", "REAR", SORRY, False),
@@ -38,7 +39,8 @@ CASES = [
     ("앞차 운전 진짜 못하네 면허 어디서 땄냐", None, None, True),
     ("한 번만 더 끼어들면 들이받는다고 해", None, None, True),
     ("뒷차한테 꺼지라고 해", None, None, True),
-    # 인사와 상관없는 말 (맞는 문구 없음)
+    # 기본 메시지 함에 맞는 말이 없는 경우 (목록에는 있어도 함에 넣지 않은 말, 인사와 상관없는 말)
+    ("앞차 주유구 열렸다고 알려줘", None, None, False),
     ("오늘 저녁에 뭐 먹을까", None, None, False),
     ("가까운 주유소 찾아줘", None, None, False),
     ("음악 좀 틀어줘", None, None, False),

@@ -16,8 +16,8 @@ object CarLook {
         "미니" to "MINI", "세단" to "SEDAN", "해치백" to "HATCHBACK", "밴" to "VAN", "픽업" to "PICKUP", "스포츠카" to "ROADSTER",
         "경찰차" to "POLICE", "버스" to "BUS", "트럭" to "TRUCK", "탱크로리" to "TANKER",
     )
-    /** '내 차 고르기' 에서 고를 수 있는 차종 (경찰차는 실제 경찰차로 오해할 수 있어 뺐다) */
-    val GARAGE_TYPES = listOf(0, 1, 2, 3, 4, 5, 7, 8)
+    /** '내 차 고르기' 에서 고를 수 있는 차종: 승용차 6종 (트럭 2종 · 버스 · 경찰차는 뺐다) */
+    val GARAGE_TYPES = listOf(0, 1, 2, 3, 4, 5)
 
     val SKIN_NAMES = listOf("파랑", "빨강", "노랑", "초록", "보라", "은색")
     /** 고르는 화면에 보여 줄 대표 색 (ARGB). 실제 차 색은 assets/scene3d/skin_N.png 팔레트에서 온다 */

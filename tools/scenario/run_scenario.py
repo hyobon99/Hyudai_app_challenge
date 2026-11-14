@@ -48,8 +48,8 @@ M_PER_DEG = 111_320.0
 CAR_L, CAR_W = 4.6, 1.9
 
 # 앱의 방향 메뉴와 같은 순서 (chat/PresetMessages.kt). 0 = 위쪽, 시계 방향으로 같은 간격 (7개 = 정칠각형, 약 51.4° 씩)
-RADIAL_MESSAGES = ["감사합니다 🙏", "양보 감사해요", "먼저 가세요", "조심히 가세요",
-                   "죄송합니다 🙇", "괜찮아요 👍", "안녕하세요 👋"]
+# 앱의 기본 메시지 함 (chat/MessageCatalog.kt 의 DEFAULT_SLOTS 와 같은 순서)
+RADIAL_MESSAGES = ["감사합니다", "좋은 하루 보내세요", "죄송합니다", "먼저 가세요", "라이트 꺼져 있어요", "추월 가능합니다"]
 
 EMULATOR_SKINS = {"A": 1, "B": 0}   # 차 색 (0 파랑, 1 빨강, 2 노랑, 3 초록, 4 보라, 5 은색)
 PRE_ROLL = 8.0    # 시작 전에 미리 달리는 시간 (앱이 이동 방향·속도를 알게 됨)
@@ -232,7 +232,7 @@ def scenario_merge(dev_a, dev_b):
         (16.2, "A: 버튼을 꾹 누르고 \"괜찮아요\"라고 답해요"),
         (20.5, "비상등 대신 말로 전했어요"),
     ]
-    actions = [(13.0, "B", "A", 1), (17.0, "A", "B", 5)]
+    actions = [(13.0, "B", "A", 0), (17.0, "A", "B", 1)]
     return Scenario("merge", "급한 끼어들기 → 양보 → 인사", road, 24.0, cars, steps, actions, "avenue", 16.0,
                     extras={"work_zone": (base + 105.0, base + 160.0, 1.75)})
 
@@ -262,7 +262,7 @@ def scenario_yield(dev_a, dev_b):
         (21.0, "B가 지나가요"),
         (27.0, "A도 다시 출발. 경적이나 손짓 없이 해결했어요"),
     ]
-    actions = [(10.0, "A", "B", 2), (13.2, "B", "A", 0)]
+    actions = [(10.0, "A", "B", 3), (13.2, "B", "A", 0)]
     pocket = (a_stop - 1.0, a_stop + 17.0)   # 오른쪽에 주차된 차가 없는 구간
     return Scenario("yield", "좁은 골목에서 마주침 → 양보", road, 33.0, cars, steps, actions, "alley", 21.0,
                     extras={"pocket": pocket})
@@ -352,7 +352,7 @@ def on_screen_position(serial, plate):
 
 
 # 정해진 메시지마다 운전자가 실제로 할 법한 말 (앱이 이 말을 듣고 그 메시지를 골라야 한다)
-SPOKEN = ["고맙습니다", "양보해 줘서 고마워요", "먼저 가세요", "조심히 가세요", "미안합니다", "괜찮아요", "안녕하세요"]
+SPOKEN = ["고맙습니다", "좋은 하루 보내세요", "미안합니다", "먼저 가세요", "라이트가 꺼져 있어요", "추월하셔도 됩니다"]
 
 
 def say(serial, to_plate, index):

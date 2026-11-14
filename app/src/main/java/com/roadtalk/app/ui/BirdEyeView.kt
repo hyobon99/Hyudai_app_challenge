@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -63,7 +64,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.roadtalk.app.chat.PresetMessages
 import com.roadtalk.app.location.LocationGateway
 import com.roadtalk.app.map.OsmBuildings
 import com.roadtalk.app.net.Geo
@@ -72,6 +72,7 @@ import com.roadtalk.app.net.RelativePosition
 import com.roadtalk.app.net.RoadMessage
 import com.roadtalk.app.ui.scene3d.Camera3D
 import com.roadtalk.app.ui.scene3d.CarLook
+import com.roadtalk.app.ui.scene3d.Lanes
 import com.roadtalk.app.ui.scene3d.Scene3DView
 import com.roadtalk.app.voice.VoiceGateway
 import kotlin.math.abs
@@ -105,8 +106,9 @@ private val TAG_BACKGROUND = Color(0xCC1B2230)
  * 3D 그림은 [Scene3DView] (OpenGL) 가 그리고, 그 위에 차 이름표와 말풍선을 같은 카메라([Camera3D])로 자리를 계산해 얹는다.
  *  - 차를 탭: 그 차를 받는 사람으로 선택 (파란 빛 고리). 말할 때 대상을 말하지 않으면 이 차에게 간다
  *  - 빈 도로를 탭: 그 자리가 속한 8방향 칸에서 가장 가까운 차를 선택
- *  - 아래 버튼을 꾹 누른 채 말하기: 누르고 있는 동안 음성을 인식하고(STT SDK), 손을 떼면 인식된 말이
- *    정해진 메시지(chat/PresetMessages.kt) 중 가장 가까운 것으로 바뀌어 전송된다
+ *  - 주변 차는 내 길 위에 있으면 가장 가까운 차로의 가운데에 그린다 (GPS 오차 때문에 차선을 밟고 달리는 것처럼 보이지 않게)
+ *  - 아래 버튼을 한 번 누르고 말하기: 음성을 인식하다가(STT SDK) 말을 멈추면 알아서 끝내고, 인식된 말이
+ *    기본 메시지 함의 6개(chat/MessageCatalog.kt) 중 가장 가까운 것으로 바뀌어 전송된다
  */
 @Composable
 fun BirdEyePanel(
@@ -119,16 +121,18 @@ fun BirdEyePanel(
     mySkin: Int,
     myFix: LocationGateway.Fix?,
     buildings: OsmBuildings.Area?,
-    onMyCarTap: () -> Unit,
+    onOpenGarage: () -> Unit,
+    onOpenMessages: () -> Unit,
     onSelectCar: (String) -> Unit,
     onSelectDirection: (RelativePosition) -> Unit,
-    onTalkStart: () -> Unit,
-    onTalkEnd: () -> Unit,
+    onTalk: () -> Unit,
     modifier: Modifier,
 ) {
     val textMeasurer = rememberTextMeasurer()
+    val context = LocalContext.current
+    val sceneView = remember { Scene3DView(context) }
     @Suppress("NAME_SHADOWING")
-    val cars = rememberSmoothedCars(cars)
+    val cars = rememberSmoothedCars(cars) { sceneView.laneCentre to sceneView.laneCount }
     // 위치가 계속 갱신돼도 탭 처리가 최신 위치를 보도록
     val currentCars by rememberUpdatedState(cars)
     // 기본은 가깝게(뒤 7m 까지) 보여주고, 그보다 뒤에 있는 차가 있으면 그 차가 들어올 만큼만 카메라를 부드럽게 물린다
@@ -153,9 +157,6 @@ fun BirdEyePanel(
     }
     val currentOnSelectCar by rememberUpdatedState(onSelectCar)
     val currentOnSelectDirection by rememberUpdatedState(onSelectDirection)
-    val currentOnMyCarTap by rememberUpdatedState(onMyCarTap)
-    val context = LocalContext.current
-    val sceneView = remember { Scene3DView(context) }
     DisposableEffect(sceneView) {
         sceneView.onResume()
         onDispose { sceneView.onPause() }
@@ -190,6 +191,7 @@ fun BirdEyePanel(
             city = buildings?.city,
             roads = buildings?.roads.orEmpty(),
             crossings = buildings?.crossings.orEmpty(),
+            signals = buildings?.signals.orEmpty(),
             ego = ego,
         )
     }
@@ -202,7 +204,7 @@ fun BirdEyePanel(
     ) {
         Text("내 주변 Car-ind CHAT 차량 · ${cars.size}대", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary)
         Text(
-            "받을 차를 누르고, 아래 버튼을 꾹 누른 채 말하세요",
+            "받을 차를 누르고, 아래 버튼을 누른 뒤 말하세요",
             fontSize = 14.sp,
             color = RoadColors.TextSecondary,
             maxLines = 1,
@@ -234,12 +236,7 @@ fun BirdEyePanel(
                                 return hypot(c.first - up.position.x, c.second - up.position.y)
                             }
                             val hit = currentCars.minByOrNull { distanceTo(it) }?.takeIf { distanceTo(it) <= 72.dp.toPx() }
-                            // 내 차를 누르면 '내 차 고르기' 를 연다 (더 가까운 다른 차가 있으면 그 차 선택이 먼저)
-                            val me = camera.project(0f, CAR_HEIGHT_M / 2, 0f)
-                            val toMe = if (me == null) Float.MAX_VALUE else hypot(me.first - up.position.x, me.second - up.position.y)
-                            if (toMe <= 64.dp.toPx() && (hit == null || toMe < distanceTo(hit))) {
-                                currentOnMyCarTap()
-                            } else if (hit != null) {
+                            if (hit != null) {
                                 currentOnSelectCar(hit.plate)
                             } else {
                                 // 빈 도로: 그 방향 칸의 차를 선택
@@ -252,25 +249,9 @@ fun BirdEyePanel(
                 val camera = Camera3D(size.width, size.height, rearM)
                 // 이름표는 차 꽁무니 바로 뒤 바닥 자리에 (화면에서는 차 아래)
                 camera.project(0f, 0f, CAR_LENGTH_M / 2 + TAG_GAP_M)?.let {
-                    drawTag(textMeasurer, "내 차 · 눌러서 꾸미기", Offset(it.first, it.second), RoadColors.Accent, Color.White, bold = true)
+                    drawTag(textMeasurer, "내 차", Offset(it.first, it.second), RoadColors.Accent, Color.White, bold = true)
                 }
-                cars.forEach { car ->
-                    val (f, l) = placement(car, rearM)
-                    val clipped = car.forwardMeters != null && car.distanceMeters >= 0 &&
-                        (abs(car.forwardMeters - f) > 0.5f || abs((car.lateralMeters ?: 0f) - l) > 0.5f)
-                    val at = camera.project(l, 0f, -f + CAR_LENGTH_M / 2 + TAG_GAP_M) ?: return@forEach
-                    // 화면 밖에 있는 차는 이름표도 그리지 않는다 (뒤쪽 가장자리로 당겨 그린 차는 화면 안이라 그대로 나온다)
-                    if (at.first < 0f || at.first > size.width || at.second < 0f || at.second > size.height) return@forEach
-                    val isSelected = car.plate == selectedPlate
-                    drawTag(
-                        textMeasurer,
-                        if (clipped) "${car.position.label} ${arrowFor(car)}" else car.position.label,
-                        Offset(at.first, at.second),
-                        if (isSelected) RoadColors.Accent else TAG_BACKGROUND,
-                        Color.White,
-                        bold = isSelected,
-                    )
-                }
+                // 다른 차에는 이름표를 붙이지 않는다 (받는 차는 차 아래 파란 빛 고리로 표시)
                 // 말풍선은 크게 그리므로 이름표에 가려지지 않게 마지막에, 차 지붕 위에 얹는다
                 cars.forEach { car ->
                     val key = Geo.plateKey(car.plate)
@@ -280,64 +261,48 @@ fun BirdEyePanel(
                     val (f, l) = placement(car, rearM)
                     val top = camera.project(l, CAR_HEIGHT_M + 0.6f, -f) ?: return@forEach
                     val bubbleAt = Offset(top.first, top.second - 14.dp.toPx())
-                    if (isIncoming) drawBubble(textMeasurer, incoming!!.text, bubbleAt, RoadColors.Warn, Color.Black)
-                    else drawBubble(textMeasurer, "보냄 · ${sent!!.text}", bubbleAt, RoadColors.Accent, Color.White)
+                    if (isIncoming) drawBubble(textMeasurer, incoming!!.text, bubbleAt, strong = true)
+                    else drawBubble(textMeasurer, "보냄 · ${sent!!.text}", bubbleAt, strong = false)
                 }
-                if (cars.isEmpty()) {
-                    drawTag(
-                        textMeasurer, "근처에 Car-ind CHAT 차가 없어요",
-                        Offset(size.width / 2, size.height * 0.16f), TAG_BACKGROUND, Color.White, bold = false,
-                    )
-                }
+            }
+            // 오른쪽 위의 작은 동그란 버튼: 내 차 고르기, 메시지 함 (누르면 오른쪽 지도 자리에 그 화면이 뜬다)
+            Column(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
+                NeonIconButton(::carIconPath, onOpenGarage)
+                NeonIconButton(::bubbleIconPath, onOpenMessages)
             }
         }
         Spacer(Modifier.height(12.dp))
-        TalkButton(voice, onTalkStart, onTalkEnd)
+        TalkButton(voice, onTalk)
     }
 }
 
 /**
- * 꾹 누르고 있는 동안만 듣는 말하기 버튼. 운전 중에도 누르기 쉽게 크게 만든다.
- * 누르면 [onStart] (음성 인식 시작), 손을 떼거나 버튼 밖으로 벗어나면 [onEnd] (인식 끝 → 전송).
+ * 말하기 버튼 (네온 상자). 운전 중에도 누르기 쉽게 크게 만든다.
+ * 한 번 누르면 [onTap] → 음성 인식 시작. 말을 멈추면 알아서 끝나고 전송된다 (voice/Endpointer). 듣는 중에 한 번 더 누르면 바로 끝난다.
+ * 평소에는 '음성으로 말하기' 만 보이고, 듣는 동안과 인식 직후에는 인식된 말을 아래에 작게 보여 준다.
  */
 @Composable
-private fun TalkButton(voice: VoiceGateway.State, onStart: () -> Unit, onEnd: () -> Unit) {
-    var pressed by remember { mutableStateOf(false) }
-    val currentStart by rememberUpdatedState(onStart)
-    val currentEnd by rememberUpdatedState(onEnd)
-    val listening = pressed || voice.listen != VoiceGateway.ListenState.IDLE
+private fun TalkButton(voice: VoiceGateway.State, onTap: () -> Unit) {
+    val listening = voice.listen != VoiceGateway.ListenState.IDLE
     Column(
         Modifier
             .fillMaxWidth()
             .height(TALK_BUTTON_HEIGHT_DP.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .background(if (pressed) RoadColors.Error else RoadColors.Accent)
-            .pointerInput(Unit) {
-                awaitEachGesture {
-                    awaitFirstDown().consume()
-                    pressed = true
-                    currentStart()
-                    waitForUpOrCancellation()
-                    pressed = false
-                    currentEnd()
-                }
-            },
+            .padding(8.dp)
+            .neonBox(radius = 26.dp, strength = if (listening) 2.2f else 1f)
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onTap),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(
-            if (pressed) "듣는 중… 말하고 손을 떼세요" else "🎤 꾹 누르고 말하기",
-            fontSize = 32.sp, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1,
-        )
-        Text(
-            when {
-                voice.partial.isNotEmpty() -> if (listening) voice.partial else "인식됨: ${voice.partial}"
-                pressed -> "예: 뒷차한테 고맙다고 해줘"
-                else -> "정해진 인사 중 가장 가까운 말이 전송돼요"
-            },
-            fontSize = 17.sp, color = Color.White.copy(alpha = 0.9f), maxLines = 1,
-            modifier = Modifier.padding(top = 6.dp),
-        )
+        Text(if (listening) "듣는 중…" else "음성으로 말하기", style = Neon.text(34, strong = listening), maxLines = 1)
+        if (voice.partial.isNotEmpty()) {
+            Text(
+                if (listening) voice.partial else "인식됨: ${voice.partial}",
+                style = Neon.text(16, weight = FontWeight.Medium),
+                maxLines = 1,
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
     }
 }
 
@@ -346,11 +311,14 @@ private const val TALK_BUTTON_HEIGHT_DP = 132
 /**
  * 상대 위치는 칼만 필터가 0.1초마다 계산해 준다 (net/CarTracker). 그 사이를 매 프레임 조금씩 따라가게 해서 화면 주사율로 매끈하게 그린다.
  * (시정수 0.1초. 위치·방향만 보간하고 나머지 값은 최신 것을 쓴다)
+ * 내 길 위의 차는 좌우 위치를 가장 가까운 차로의 가운데로 맞춘다. road() = 지금 그려진 내 길의 (가운데 자리 m, 차로 수).
+ * 차로를 바꿀 때는 옆 차로 가운데로 천천히(시정수 [LANE_CHANGE_SECONDS]) 옮겨 간다.
  */
 @Composable
-private fun rememberSmoothedCars(cars: List<NearbyCar>): List<NearbyCar> {
+private fun rememberSmoothedCars(cars: List<NearbyCar>, road: () -> Pair<Float, Int>): List<NearbyCar> {
     val target by rememberUpdatedState(cars)
     var shown by remember { mutableStateOf(cars) }
+    val laneByPlate = remember { HashMap<String, Int>() }
     LaunchedEffect(Unit) {
         var last = 0L
         while (true) {
@@ -358,8 +326,14 @@ private fun rememberSmoothedCars(cars: List<NearbyCar>): List<NearbyCar> {
                 val dt = if (last == 0L) 0f else ((now - last) / 1e9f).coerceAtMost(0.1f)
                 last = now
                 val k = 1f - exp(-dt / SMOOTH_SECONDS)
+                val kLane = 1f - exp(-dt / LANE_CHANGE_SECONDS)
+                val (roadCentre, lanes) = road()
                 val previous = shown.associateBy { it.plate }
-                val next = target.map { t -> previous[t.plate]?.let { p -> approach(p, t, k) } ?: t }
+                val next = target.map { t ->
+                    val kept = keepLane(t, roadCentre, lanes, laneByPlate)
+                    previous[t.plate]?.let { p -> approach(p, kept, k, if (kept !== t) kLane else k) } ?: kept
+                }
+                if (laneByPlate.size > target.size) laneByPlate.keys.retainAll(target.mapTo(HashSet()) { it.plate })
                 if (next != shown) shown = next
             }
         }
@@ -367,7 +341,19 @@ private fun rememberSmoothedCars(cars: List<NearbyCar>): List<NearbyCar> {
     return shown
 }
 
-private fun approach(from: NearbyCar, to: NearbyCar, k: Float): NearbyCar {
+/** 내 길 위를 나란히 달리는 차면 좌우 위치를 그 차로의 가운데로 바꾼 것을, 아니면 그대로 돌려준다 */
+private fun keepLane(car: NearbyCar, roadCentre: Float, lanes: Int, laneByPlate: MutableMap<String, Int>): NearbyCar {
+    val lateral = car.lateralMeters
+    if (lateral == null || car.distanceMeters < 0 || !Lanes.onRoad(lateral, car.relativeHeadingDeg, roadCentre, lanes)) {
+        laneByPlate.remove(car.plate)
+        return car
+    }
+    val lane = Lanes.laneOf(lateral, roadCentre, lanes, laneByPlate[car.plate])
+    laneByPlate[car.plate] = lane
+    return car.copy(lateralMeters = Lanes.centre(roadCentre, lanes, lane))
+}
+
+private fun approach(from: NearbyCar, to: NearbyCar, k: Float, kLateral: Float): NearbyCar {
     val f0 = from.forwardMeters
     val l0 = from.lateralMeters
     val f1 = to.forwardMeters
@@ -383,13 +369,15 @@ private fun approach(from: NearbyCar, to: NearbyCar, k: Float): NearbyCar {
     } else h1
     // 거의 다 왔으면 목표값으로 맞춰서 더 이상 다시 그리지 않게 한다
     val f = if (abs(f1 - f0) < 0.02f) f1 else f0 + (f1 - f0) * k
-    val l = if (abs(l1 - l0) < 0.02f) l1 else l0 + (l1 - l0) * k
+    val l = if (abs(l1 - l0) < 0.02f) l1 else l0 + (l1 - l0) * kLateral
     return to.copy(forwardMeters = f, lateralMeters = l, relativeHeadingDeg = heading)
 }
 
 private const val UI_LOG_TAG = "RoadTalkUi"
 /** 0.1초마다 오는 위치를 따라가는 빠르기. 갱신 간격과 같게 잡아 계단은 없애고 뒤처짐은 작게 (상대 속도 5m/s 에서 0.5m) */
 private const val SMOOTH_SECONDS = 0.1f
+/** 차로에 맞춰 그리는 차가 옆 차로 가운데로 옮겨 가는 빠르기 (차로 변경이 순간이동처럼 보이지 않게) */
+private const val LANE_CHANGE_SECONDS = 0.35f
 /** 화면을 넓히는 한계 (m). 이보다 먼 차는 가장자리에 흐리게 붙는다 */
 private const val MAX_FRONT_M = 30f
 private const val MAX_REAR_M = 22f
@@ -474,15 +462,18 @@ private fun DrawScope.drawTag(textMeasurer: TextMeasurer, text: String, topCente
     drawText(layout, topLeft = Offset(left + padX, top + padY))
 }
 
-/** 주행 중에 한눈에 읽히도록 크게 그린다 (글자 60sp). 화면 폭을 넘는 문구는 줄을 바꾼다 */
-private fun DrawScope.drawBubble(textMeasurer: TextMeasurer, text: String, bottomCenter: Offset, background: Color, textColor: Color) {
-    val padX = 28.dp.toPx()
-    val padY = 18.dp.toPx()
-    val edge = 6.dp.toPx()
-    val maxTextWidth = (size.width - edge * 2 - padX * 2).coerceAtLeast(1f)
+/**
+ * 차 위에 뜨는 말풍선: 검은 바탕의 둥근 네모에 네온 테두리, 네온 글자. 폭은 글자에 맞춰 좁게 잡는다.
+ * strong = 받은 메시지 (더 진하게 빛난다). 화면 폭을 넘는 문구는 줄을 바꾼다
+ */
+private fun DrawScope.drawBubble(textMeasurer: TextMeasurer, text: String, bottomCenter: Offset, strong: Boolean) {
+    val padX = 18.dp.toPx() * BUBBLE_SCALE
+    val padY = 11.dp.toPx() * BUBBLE_SCALE
+    val edge = 12.dp.toPx()
+    val maxTextWidth = (size.width * 0.72f - padX * 2).coerceAtLeast(1f)
     val layout = textMeasurer.measure(
         AnnotatedString(text),
-        TextStyle(color = textColor, fontSize = BUBBLE_TEXT_SP.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center),
+        Neon.text(BUBBLE_TEXT_SP, strong).copy(textAlign = TextAlign.Center),
         constraints = Constraints(maxWidth = maxTextWidth.toInt()),
         maxLines = 3,
     )
@@ -490,14 +481,14 @@ private fun DrawScope.drawBubble(textMeasurer: TextMeasurer, text: String, botto
     val h = layout.size.height + padY * 2
     val left = (bottomCenter.x - w / 2).coerceIn(edge, (size.width - w - edge).coerceAtLeast(edge))
     val top = (bottomCenter.y - h).coerceAtLeast(edge)
-    drawRoundRect(background, Offset(left, top), Size(w, h), CornerRadius(32.dp.toPx()))
-    // 말풍선 꼬리
-    drawCircle(background, 14.dp.toPx(), Offset(bottomCenter.x.coerceIn(left + 40.dp.toPx(), left + w - 40.dp.toPx()), top + h + 6.dp.toPx()))
+    neonRoundRect(Offset(left, top), Size(w, h), 16.dp.toPx() * BUBBLE_SCALE, strength = if (strong) 1.6f else 1f, line = BUBBLE_SCALE)
     drawText(layout, topLeft = Offset(left + padX, top + padY))
 }
 
-/** 말풍선 글자 크기 (예전 15sp 의 4배) */
-private const val BUBBLE_TEXT_SP = 60
+/** 말풍선 글자 크기 (처음 34sp 에서 1.5배 줄이고, 다시 3/4 로 줄였다) */
+private const val BUBBLE_TEXT_SP = 17
+/** 말풍선의 여백·모서리·테두리 굵기에 곱하는 값 (처음 크기의 1/1.5 × 3/4 = 절반) */
+private const val BUBBLE_SCALE = 0.5f
 
 private fun DrawScope.drawCenteredText(textMeasurer: TextMeasurer, text: String, topCenter: Offset, style: TextStyle) {
     val layout = textMeasurer.measure(AnnotatedString(text), style)

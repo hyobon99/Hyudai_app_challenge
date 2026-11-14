@@ -47,13 +47,13 @@ class BuildingsSource(private val scope: CoroutineScope, private val bundled: ()
                 if (packed != null && distance(lat, lng, packed) < bundledRadius - EDGE_M) {
                     cover = bundledRadius - EDGE_M
                     _area.value = packed
-                    Log.d(TAG, "map: ${packed.buildings.size} buildings, ${packed.roads.size} roads, ${packed.crossings.size} crossings from the bundled area")
+                    Log.d(TAG, "map: ${packed.buildings.size} buildings, ${packed.roads.size} roads, ${packed.crossings.size} crossings, ${packed.signals.size} signals from the bundled area")
                 } else {
                     val fetched = OsmBuildings.parseArea(fetch(OsmBuildings.query(lat, lng, RADIUS_M)), lat, lng)
                     fetched.city          // 3D 모양은 여기(백그라운드)에서 미리 만들어 둔다
                     cover = REFETCH_M
                     _area.value = fetched
-                    Log.d(TAG, "map: ${fetched.buildings.size} buildings, ${fetched.roads.size} roads, ${fetched.crossings.size} crossings around $lat,$lng")
+                    Log.d(TAG, "map: ${fetched.buildings.size} buildings, ${fetched.roads.size} roads, ${fetched.crossings.size} crossings, ${fetched.signals.size} signals around $lat,$lng")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "buildings unavailable: ${e.javaClass.simpleName} ${e.message}")

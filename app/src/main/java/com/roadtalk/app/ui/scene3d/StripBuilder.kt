@@ -5,10 +5,12 @@ import kotlin.math.hypot
 /**
  * 지도 도로를 '바닥에 깐 띠' 삼각형으로 만든다. 좌표는 내 차 기준 (x = 오른쪽 m, z = −앞 m).
  *
- * 내가 달리는 길(곧은 3차선 + 양옆 인도)을 가로지르는 띠는 자리마다 높이를 달리 깐다:
- *   차도 위(|x| ≤ [LANES_HALF])   → 차선 바로 위. 교차로 안에서는 차선·가장자리 선이 가려진다
- *   인도 위([LANES_HALF] ~ [WALK_HALF]) → 인도보다 살짝 높게. 인도가 끊겨 길이 뚫린 것처럼 보인다
- *   그 바깥                        → 땅 높이
+ * 내가 달리는 길(차도 + 양옆 인도)을 가로지르는 띠는 자리마다 높이를 달리 깐다:
+ *   차도 위   → 차선 바로 위. 교차로 안에서는 차선·가장자리 선이 가려진다
+ *   인도 위   → 인도보다 살짝 높게. 인도가 끊겨 길이 뚫린 것처럼 보인다
+ *   그 바깥   → 땅 높이
+ * 내 길과 나란한 띠(맞은편 차도 등)는 내 길 바깥 부분만 깐다 (내 인도가 중앙 분리대처럼 남는다).
+ * 내 길의 차도·인도가 어디까지인지는 [setRoad] 로 알려 준다 (차로 수에 따라 달라진다).
  * 정점은 x y z · 법선(위) · u v(0) 의 8개 값, 삼각형 3개씩 [data] 에 [size] 만큼 쌓인다.
  */
 class StripBuilder {
@@ -17,16 +19,36 @@ class StripBuilder {
     var size = 0
         private set
 
+    /** 내 길의 차도(lanes)와 인도 바깥(walk)의 좌우 끝 (x, m) */
+    var lanesMin = -5.64f
+        private set
+    var lanesMax = 5.64f
+        private set
+    var walkMin = -7.31f
+        private set
+    var walkMax = 7.31f
+        private set
+
     private val quad = FloatArray(8)
     private var poly = FloatArray(32)
     private var temp = FloatArray(32)
+
+    fun setRoad(lanesMin: Float, lanesMax: Float, walkMin: Float, walkMax: Float) {
+        this.lanesMin = lanesMin
+        this.lanesMax = lanesMax
+        this.walkMin = walkMin
+        this.walkMax = walkMax
+    }
 
     fun reset() {
         size = 0
     }
 
-    /** (ax, az) → (bx, bz) 를 중심선으로 하는 폭 2 × halfWidth 의 띠. 꺾이는 곳이 비지 않게 양 끝을 조금 늘인다 */
-    fun strip(ax: Float, az: Float, bx: Float, bz: Float, halfWidth: Float) {
+    /**
+     * (ax, az) → (bx, bz) 를 중심선으로 하는 폭 2 × halfWidth 의 띠. 꺾이는 곳이 비지 않게 양 끝을 조금 늘인다.
+     * crossing = 내 길을 가로지르는 길인지 (아니면 내 길 바깥 부분만 깐다)
+     */
+    fun strip(ax: Float, az: Float, bx: Float, bz: Float, halfWidth: Float, crossing: Boolean = true) {
         val length = hypot(bx - ax, bz - az)
         if (length < 0.05f) return
         val dx = (bx - ax) / length
@@ -42,16 +64,24 @@ class StripBuilder {
         quad[2] = ex + nx; quad[3] = ez + nz
         quad[4] = ex - nx; quad[5] = ez - nz
         quad[6] = sx - nx; quad[7] = sz - nz
-        for (band in 0 until BAND_EDGES.size - 1) {
-            val count = clip(quad, 4, BAND_EDGES[band], BAND_EDGES[band + 1])
-            if (count >= 3) fan(count, BAND_HEIGHTS[band])
+        band(-FAR, walkMin, GROUND_Y)
+        band(walkMax, FAR, GROUND_Y)
+        if (crossing) {
+            band(walkMin, lanesMin, OVER_WALK_Y)
+            band(lanesMin, lanesMax, ON_LANES_Y)
+            band(lanesMax, walkMax, OVER_WALK_Y)
         }
     }
 
-    /** 다각형(x z 쌍)을 lo ≤ x ≤ hi 로 자른다. 결과는 [poly] 에, 꼭짓점 수를 돌려준다 */
-    private fun clip(source: FloatArray, sourceCount: Int, lo: Float, hi: Float): Int {
-        val first = clipSide(source, sourceCount, temp, lo, keepGreater = true)
-        return if (first < 3) 0 else clipSide(temp, first, poly, hi, keepGreater = false)
+    /** 그 x 자리에서 띠가 깔리는 높이 */
+    fun heightAt(x: Float): Float =
+        if (x in lanesMin..lanesMax) ON_LANES_Y else if (x in walkMin..walkMax) OVER_WALK_Y else GROUND_Y
+
+    private fun band(lo: Float, hi: Float, y: Float) {
+        val first = clipSide(quad, 4, temp, lo, keepGreater = true)
+        if (first < 3) return
+        val count = clipSide(temp, first, poly, hi, keepGreater = false)
+        if (count >= 3) fan(count, y)
     }
 
     private fun clipSide(source: FloatArray, count: Int, target: FloatArray, edge: Float, keepGreater: Boolean): Int {
@@ -95,20 +125,9 @@ class StripBuilder {
     }
 
     companion object {
-        /** 내 도로의 차도 끝 (인도가 시작되는 곳) 과 인도 바깥 끝 (m) */
-        const val LANES_HALF = 5.64f
-        const val WALK_HALF = 7.31f
         const val ON_LANES_Y = 0.04f
         const val OVER_WALK_Y = 0.18f
         const val GROUND_Y = 0f
         private const val FAR = 1e6f
-        private val BAND_EDGES = floatArrayOf(-FAR, -WALK_HALF, -LANES_HALF, LANES_HALF, WALK_HALF, FAR)
-        private val BAND_HEIGHTS = floatArrayOf(GROUND_Y, OVER_WALK_Y, ON_LANES_Y, OVER_WALK_Y, GROUND_Y)
-
-        /** 그 x 자리에서 띠가 깔리는 높이 */
-        fun heightAt(x: Float): Float {
-            val a = kotlin.math.abs(x)
-            return if (a <= LANES_HALF) ON_LANES_Y else if (a <= WALK_HALF) OVER_WALK_Y else GROUND_Y
-        }
     }
 }

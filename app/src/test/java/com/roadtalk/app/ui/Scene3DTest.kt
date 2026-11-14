@@ -78,4 +78,26 @@ class Scene3DTest {
         assertEquals(CarLook.SKIN_COUNT, CarLook.SKIN_NAMES.size)
         assertEquals(CarLook.SKIN_COUNT, CarLook.SKIN_COLORS.size)
     }
+
+    @Test
+    fun onlyPassengerCarsCanBePicked() {
+        // 고를 수 있는 차종은 승용차 6종 (경찰차 6 · 버스 7 · 트럭 8, 9 는 없다)
+        assertEquals(listOf(0, 1, 2, 3, 4, 5), CarLook.GARAGE_TYPES)
+        assertEquals(CarLook.TYPE_COUNT, CarLook.TYPE_NAMES.size)
+    }
+
+    @Test
+    fun treeLeavesFollowTheSeason() {
+        val spring = com.roadtalk.app.ui.scene3d.Seasons.leafTint(4)!!
+        val autumn = com.roadtalk.app.ui.scene3d.Seasons.leafTint(11)!!
+        val winter = com.roadtalk.app.ui.scene3d.Seasons.leafTint(1)!!
+        assertNull("여름은 모델의 원래 초록", com.roadtalk.app.ui.scene3d.Seasons.leafTint(7))
+        assertTrue("봄은 분홍: 빨강이 초록보다 크고 파랑도 많다", spring[0] > spring[1] && spring[2] > spring[1])
+        assertTrue("가을은 주황: 빨강 > 초록 > 파랑", autumn[0] > autumn[1] && autumn[1] > autumn[2])
+        assertTrue("겨울은 흰색", winter.take(3).all { it > 0.9f })
+        // 달마다 어느 계절인지
+        assertTrue((3..5).all { com.roadtalk.app.ui.scene3d.Seasons.leafTint(it) === spring })
+        assertTrue((9..11).all { com.roadtalk.app.ui.scene3d.Seasons.leafTint(it) === autumn })
+        assertTrue(listOf(12, 1, 2).all { com.roadtalk.app.ui.scene3d.Seasons.leafTint(it) === winter })
+    }
 }

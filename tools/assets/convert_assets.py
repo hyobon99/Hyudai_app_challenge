@@ -10,8 +10,9 @@
 결과: app/src/main/assets/scene3d/
     car_<n>.mesh        차 10종 (0~5 승용차, 6 경찰차, 7 버스, 8·9 트럭)
     skin_<n>.png        차 색 6종 (0 파랑, 1 빨강, 2 노랑, 3 초록, 4 보라, 5 은색)
-    road.mesh           3차선 도로 10m 한 토막 (Road Straight 를 차선 폭 3.5m 로 넓혀 다시 이어 붙인 것)
-    tree.mesh, lamp.mesh, city.png (도로·나무·가로등 색)
+    road_left/dash/plain/right.mesh   도로 10m 토막의 부품 (Road Straight 를 차선 폭 3.5m 로 넓혀 나눈 것. 앱이 차로 수에 맞춰 이어 붙인다)
+    signal.mesh         신호등 (불이 꺼진 모습)
+    tree_leaves.mesh, tree_trunk.mesh (나무: 잎은 앱이 계절 색으로 칠한다), lamp.mesh, city.png (도로·나무·가로등 색)
 
 메시 파일: "RTM1", 정점 수(uint32), 정점마다 float32 8개 (x, y, z, nx, ny, nz, u, v). 삼각형 3개씩, 인덱스 없음.
 좌표: 미터, Y 가 위, 차 앞쪽 = -Z, 오른쪽 = +X, 바닥 = y 0. UV 원점은 그림의 왼쪽 위.
@@ -87,16 +88,40 @@ def _slice(verts, x_min, x_max, shift):
 
 
 def convert_road(src):
-    """2차선 Road Straight → 3차선 (가운데 차선의 중심이 x = 0). 조각을 차선 중심에서 잘라 다시 이어 붙인다"""
+    """2차선 Road Straight 를 차로 수에 상관없이 이어 붙일 수 있는 부품 네 개로 나눈다 (차선 폭 3.5m 로 넓혀서).
+        left   왼쪽 인도 + 가장자리 선 + 첫 차로의 왼쪽 절반   (x = 0 이 첫 차로의 가운데)
+        dash   차로와 차로 사이: 양쪽 차로의 절반씩 + 가운데 흰 점선   (x = 0 이 차로 경계)
+        plain  dash 에서 점선만 뺀 것 (중앙선 자리. 노란 줄은 앱이 그린다)
+        right  마지막 차로의 오른쪽 절반 + 가장자리 선 + 오른쪽 인도   (x = 0 이 마지막 차로의 가운데)
+    앱은 차로 수 N 에 맞춰 left, (dash 또는 plain) × (N−1), right 를 나란히 놓는다."""
     verts = [(p[0], p[1] - ROAD_Y, p[2], n[0], n[1], n[2], uv[0], uv[1])
              for m in glb_reader.load(src) for p, n, uv in zip(m.positions, m.normals, m.uvs)]
     half = TILE_LANE / 2
-    parts = (_slice(verts, -99, -half, -half)        # 왼쪽 인도 + 가장자리 선 + 차선 반쪽
-             + _slice(verts, -half, half, -half)     # 점선 (왼쪽)
-             + _slice(verts, -half, half, half)      # 점선 (오른쪽)
-             + _slice(verts, half, 99, half))        # 차선 반쪽 + 가장자리 선 + 오른쪽 인도
     k = LANE_M / TILE_LANE
-    return [(v[0] * k,) + tuple(v[1:]) for v in parts]
+
+    def widen(part):
+        return [(v[0] * k,) + tuple(v[1:]) for v in part]
+
+    dash = _slice(verts, -half, half, 0.0)
+    plain = []
+    for t in range(0, len(dash), 3):
+        tri = dash[t:t + 3]
+        if all(v[1] > 0.005 and abs(v[0]) < 0.2 for v in tri):      # 가운데 점선 (아스팔트보다 살짝 위에 놓인 면)
+            continue
+        plain.extend(tri)
+    return {"left": widen(_slice(verts, -99, -half, half)), "dash": widen(dash), "plain": widen(plain), "right": widen(_slice(verts, half, 99, -half))}
+
+
+def convert_traffic_light(src):
+    """신호등. 지도에는 위치만 있고 지금 무슨 색인지는 없으므로, 불빛 면을 몸통과 같은 어두운 색으로 바꿔 '꺼진' 모습으로 만든다"""
+    meshes = glb_reader.load(src)
+    body_uv = next(m.uvs[0] for m in meshes if "Emissive" not in m.material)
+    out = []
+    for m in meshes:
+        for p, n, uv in zip(m.positions, m.normals, m.uvs):
+            u, v = body_uv if "Emissive" in m.material else uv
+            out.append((p[0], p[1], p[2], n[0], n[1], n[2], u, v))
+    return out
 
 
 def convert_prop(src):
@@ -132,15 +157,36 @@ def main():
         cars.append(verts)
     for i, name in enumerate(SKINS):
         shutil.copyfile(os.path.join(base, "cars", "Textures", "Palette_%s.png" % name), os.path.join(OUT, "skin_%d.png" % i))
-    road = convert_road(os.path.join(base, "road", "GLB", "SM_Road_Straight.glb"))
-    write_mesh(os.path.join(OUT, "road.mesh"), road)
+    parts = convert_road(os.path.join(base, "road", "GLB", "SM_Road_Straight.glb"))
+    for name, verts in parts.items():
+        write_mesh(os.path.join(OUT, "road_%s.mesh" % name), verts)
+    if os.path.exists(os.path.join(OUT, "road.mesh")):
+        os.remove(os.path.join(OUT, "road.mesh"))
+    # 미리보기용 3차선
+    road = ([(v[0] - LANE_M,) + tuple(v[1:]) for v in parts["left"]] + [(v[0] - LANE_M / 2,) + tuple(v[1:]) for v in parts["dash"]]
+            + [(v[0] + LANE_M / 2,) + tuple(v[1:]) for v in parts["dash"]] + [(v[0] + LANE_M,) + tuple(v[1:]) for v in parts["right"]])
+    write_mesh(os.path.join(OUT, "signal.mesh"), convert_traffic_light(os.path.join(base, "road", "GLB", "SM_Traffic_Light.glb")))
     tree = convert_prop(os.path.join(base, "road", "GLB", "SM_Tree_Street.glb"))
-    write_mesh(os.path.join(OUT, "tree.mesh"), tree)
+    # 잎(팔레트에서 초록인 면)과 줄기를 나눠 둔다: 앱이 계절에 따라 잎 색만 바꾼다
+    city_palette = Image.open(os.path.join(base, "road", "Textures", "T_Palette.png")).convert("RGB")
+
+    def is_leaf(v):
+        w, h = city_palette.size
+        r, g, b = city_palette.getpixel((min(int(v[6] * w), w - 1), min(int(v[7] * h), h - 1)))
+        return g > r * 1.12 and g > b * 1.12
+
+    leaves = [v for t in range(0, len(tree), 3) if is_leaf(tree[t]) for v in tree[t:t + 3]]
+    trunk = [v for t in range(0, len(tree), 3) if not is_leaf(tree[t]) for v in tree[t:t + 3]]
+    write_mesh(os.path.join(OUT, "tree_leaves.mesh"), leaves)
+    write_mesh(os.path.join(OUT, "tree_trunk.mesh"), trunk)
+    if os.path.exists(os.path.join(OUT, "tree.mesh")):
+        os.remove(os.path.join(OUT, "tree.mesh"))
+    print("tree    잎 삼각형 %d, 줄기 %d" % (len(leaves) // 3, len(trunk) // 3))
     lamp = convert_prop(os.path.join(base, "road", "GLB", "SM_Street_Lamp.glb"))
     write_mesh(os.path.join(OUT, "lamp.mesh"), lamp)
     shutil.copyfile(os.path.join(base, "road", "Textures", "T_Palette.png"), os.path.join(OUT, "city.png"))
     xs = [v[0] for v in road]
-    print("road    삼각형 %d  폭 %.2f ~ %.2f m" % (len(road) // 3, min(xs), max(xs)))
+    print("road    부품 %s  (3차선으로 이으면 폭 %.2f ~ %.2f m)" % ({k: len(v) // 3 for k, v in parts.items()}, min(xs), max(xs)))
     print("→", os.path.normpath(OUT))
 
     if preview_path:

@@ -14,13 +14,14 @@ object OsmBuildings {
     /** points = 바닥 윤곽의 꼭짓점 (동쪽 m, 북쪽 m 이 차례로, 기준점 기준, 반시계 방향, 끝점은 첫 점을 되풀이하지 않는다) */
     class Footprint(val id: Long, val points: FloatArray, val height: Float)
 
-    /** 한 번 받아 온 구역: 기준점과 그 둘레의 건물 · 도로 · 횡단보도. city = 건물들을 3D 로 세운 모양 */
+    /** 한 번 받아 온 구역: 기준점과 그 둘레의 건물 · 도로 · 횡단보도 · 신호등. city = 건물들을 3D 로 세운 모양 */
     class Area(
         val originLat: Double,
         val originLng: Double,
         val buildings: List<Footprint>,
         val roads: List<OsmRoads.Road> = emptyList(),
-        val crossings: List<OsmRoads.Crossing> = emptyList(),
+        val crossings: List<OsmRoads.Spot> = emptyList(),
+        val signals: List<OsmRoads.Spot> = emptyList(),
     ) {
         val city: CityMesh by lazy { CityMesh.build(buildings) }
     }
@@ -33,10 +34,10 @@ object OsmBuildings {
     private const val ROADS =
         "motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"
 
-    /** 이 위치 둘레 radius m 안의 건물 · 차가 다니는 길 · 횡단보도를 달라는 Overpass 질의문 */
+    /** 이 위치 둘레 radius m 안의 건물 · 차가 다니는 길 · 횡단보도 · 신호등을 달라는 Overpass 질의문 */
     fun query(lat: Double, lng: Double, radiusMeters: Int): String {
         val around = "(around:$radiusMeters,$lat,$lng)"
-        return "[out:json][timeout:20];(way[\"building\"]$around;way[\"highway\"~\"^($ROADS)$\"]$around;node[\"highway\"=\"crossing\"]$around;);out tags geom;"
+        return "[out:json][timeout:20];(way[\"building\"]$around;way[\"highway\"~\"^($ROADS)$\"]$around;node[\"highway\"~\"^(crossing|traffic_signals)$\"]$around;);out tags geom;"
     }
 
     fun east(lng: Double, originLat: Double, originLng: Double): Float =
@@ -46,8 +47,8 @@ object OsmBuildings {
 
     /** Overpass 응답(JSON) → 구역. 형식이 맞지 않는 항목은 건너뛴다 */
     fun parseArea(json: String, originLat: Double, originLng: Double): Area {
-        val (roads, crossings) = OsmRoads.parse(json, originLat, originLng)
-        return Area(originLat, originLng, parse(json, originLat, originLng), roads, crossings)
+        val map = OsmRoads.parse(json, originLat, originLng)
+        return Area(originLat, originLng, parse(json, originLat, originLng), map.roads, map.crossings, map.signals)
     }
 
     /** Overpass 응답(JSON) → 건물 윤곽 목록 (도로·횡단보도 항목은 건너뛴다) */

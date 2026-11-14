@@ -62,6 +62,8 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     val mySkin by vm.mySkin.collectAsStateWithLifecycle()
     val myCarType by vm.myCarType.collectAsStateWithLifecycle()
     val garageOpen by vm.garageOpen.collectAsStateWithLifecycle()
+    val messagesOpen by vm.messagesOpen.collectAsStateWithLifecycle()
+    val messageSlots by vm.messageSlots.collectAsStateWithLifecycle()
     val buildings by vm.buildings.collectAsStateWithLifecycle()
     val myLocation by vm.myLocation.collectAsStateWithLifecycle()
     val backendStatus by vm.backendStatus.collectAsStateWithLifecycle()
@@ -82,9 +84,7 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                 backendStatus = backendStatus,
                 vehicle = vehicle,
                 voice = voice,
-                mySkin = mySkin,
                 onEditPlate = { editingPlate = true },
-                onPickSkin = vm::openGarage,
                 onEditServer = { editingServer = true },
             )
             Spacer(Modifier.height(16.dp))
@@ -97,13 +97,13 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     voice = voice,
                     myType = myCarType,
                     mySkin = mySkin,
-                    onMyCarTap = vm::openGarage,
+                    onOpenGarage = vm::openGarage,
+                    onOpenMessages = vm::openMessages,
                     myFix = myLocation,
                     buildings = buildings,
                     onSelectCar = vm::select,
                     onSelectDirection = vm::selectDirection,
-                    onTalkStart = vm::startTalking,
-                    onTalkEnd = vm::stopTalking,
+                    onTalk = vm::toggleTalking,
                     modifier = Modifier
                         .weight(0.42f)
                         .fillMaxHeight(),
@@ -115,6 +115,15 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                         onPickType = vm::setMyCarType,
                         onPickSkin = vm::setMySkin,
                         onClose = vm::closeGarage,
+                        modifier = Modifier
+                            .weight(0.58f)
+                            .fillMaxHeight(),
+                    )
+                } else if (messagesOpen) {
+                    MessagesPanel(
+                        slots = messageSlots,
+                        onAssign = vm::setMessageSlot,
+                        onClose = vm::closeMessages,
                         modifier = Modifier
                             .weight(0.58f)
                             .fillMaxHeight(),
@@ -236,33 +245,13 @@ private fun TopBar(
     backendStatus: String?,
     vehicle: VehicleGateway.State,
     voice: VoiceGateway.State,
-    mySkin: Int,
     onEditPlate: () -> Unit,
-    onPickSkin: () -> Unit,
     onEditServer: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("Car-ind CHAT", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = RoadColors.TextPrimary)
         Spacer(Modifier.width(20.dp))
         Pill("내 차 $myPlate ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditPlate))
-        Spacer(Modifier.width(8.dp))
-        Row(
-            Modifier
-                .clip(RoundedCornerShape(50))
-                .background(RoadColors.SurfaceHigh)
-                .clickable(onClick = onPickSkin)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(16.dp)
-                    .clip(CircleShape)
-                    .background(Color(CarLook.SKIN_COLORS[mySkin.coerceIn(0, CarLook.SKIN_COUNT - 1)]))
-            )
-            Spacer(Modifier.width(8.dp))
-            Text("내 차 꾸미기", fontSize = 15.sp, color = RoadColors.TextPrimary)
-        }
         Spacer(Modifier.width(8.dp))
         Pill("서버: $backend ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditServer))
         Spacer(Modifier.width(8.dp))
