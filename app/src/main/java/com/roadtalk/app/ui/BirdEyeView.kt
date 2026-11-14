@@ -198,13 +198,7 @@ fun BirdEyePanel(
             .background(RoadColors.Surface)
             .padding(16.dp)
     ) {
-        Text("내 주변 Car-ind CHAT 차량 · ${cars.size}대", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary)
-        Text(
-            "받을 차를 누르고, 아래 버튼을 누른 뒤 말하세요",
-            fontSize = 14.sp,
-            color = RoadColors.TextSecondary,
-            maxLines = 1,
-        )
+        Text("Car-ind Map", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary, maxLines = 1)
         Spacer(Modifier.height(10.dp))
         Box(
             Modifier
