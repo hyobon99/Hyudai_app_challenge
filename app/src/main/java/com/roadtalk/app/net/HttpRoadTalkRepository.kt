@@ -132,8 +132,16 @@ class HttpRoadTalkRepository(
             wake.trySend(Unit)
         }
 
-    /** 주변 차가 고른 색 (번호 키 → 0~5) */
+    @Volatile override var myCarType: Int = 0
+        set(value) {
+            if (field == value) return
+            field = value
+            wake.trySend(Unit)
+        }
+
+    /** 주변 차가 고른 색 (번호 키 → 0~5) 과 차종 (0~9) */
     private val skins = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val carTypes = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     override fun updateMyPresence(myPlate: String, position: MyPosition?) {
         me = Me(myPlate, position)
@@ -144,7 +152,11 @@ class HttpRoadTalkRepository(
     /** 추적 중인 차들의 지금 위치 + 좌표를 안 보낸 차(거리 미확인)를 화면으로 내보낸다 */
     private fun emitNearby() {
         val now = System.currentTimeMillis()
-        val cars = (tracker.snapshot(now) + untracked).map { car -> skins[car.id]?.let { car.copy(skin = it) } ?: car }
+        val cars = (tracker.snapshot(now) + untracked).map { car ->
+            val skin = skins[car.id]
+            val type = carTypes[car.id]
+            if (skin == null && type == null) car else car.copy(skin = skin, carType = type)
+        }
         _nearby.value = cars
         // 움직임 확인용: adb shell setprop log.tag.RoadTalkTrack VERBOSE 로 켠다
         if (Log.isLoggable(TRACK_TAG, Log.VERBOSE)) {
@@ -229,7 +241,8 @@ class HttpRoadTalkRepository(
                 // 위치 측정 시각을 서버 시계로 (시계 차이를 아직 모르면 생략 → 받는 쪽은 fixAge 로 계산)
                 .put("fixedAt", clockOffset?.let { offset -> pos?.let { it.fixedAtMillis + offset } } ?: JSONObject.NULL)
                 .put("accuracy", pos?.accuracyMeters?.toDouble() ?: JSONObject.NULL)
-                .put("skin", mySkin),
+                .put("skin", mySkin)
+                .put("car", myCarType),
         )
         noteServerTime(sentAt, System.currentTimeMillis(), res.optLong("now", 0))
     }
@@ -259,6 +272,8 @@ class HttpRoadTalkRepository(
             if (key == Geo.plateKey(current.plate)) continue
             val skin = if (car.isNull("skin")) null else car.optInt("skin", -1).takeIf { it in 0..5 }
             if (skin != null) skins[key] = skin else skins.remove(key)
+            val type = if (car.isNull("car")) null else car.optInt("car", -1).takeIf { it in 0..9 }
+            if (type != null) carTypes[key] = type else carTypes.remove(key)
             val lat = car.optDoubleOrNull("lat")
             val lng = car.optDoubleOrNull("lng")
             if (lat == null || lng == null) {

@@ -27,6 +27,11 @@ interface RoadTalkRepository {
         get() = 0
         set(_) {}
 
+    /** 내 차종 (0~9). 다른 차 화면에 이 모양으로 보인다. 지원하지 않는 서버는 무시한다 */
+    var myCarType: Int
+        get() = 0
+        set(_) {}
+
     suspend fun send(message: RoadMessage)
 
     /**

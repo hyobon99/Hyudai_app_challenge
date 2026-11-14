@@ -64,6 +64,8 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.roadtalk.app.chat.PresetMessages
+import com.roadtalk.app.location.LocationGateway
+import com.roadtalk.app.map.OsmBuildings
 import com.roadtalk.app.net.Geo
 import com.roadtalk.app.net.NearbyCar
 import com.roadtalk.app.net.RelativePosition
@@ -110,9 +112,11 @@ fun BirdEyePanel(
     incoming: RoadMessage?,
     sent: RoadMessage?,
     voice: VoiceGateway.State,
-    myPlate: String,
+    myType: Int,
     mySkin: Int,
-    speedMps: Float,
+    myFix: LocationGateway.Fix?,
+    buildings: OsmBuildings.Area?,
+    onMyCarTap: () -> Unit,
     onSelectCar: (String) -> Unit,
     onSelectDirection: (RelativePosition) -> Unit,
     onTalkStart: () -> Unit,
@@ -146,12 +150,26 @@ fun BirdEyePanel(
     }
     val currentOnSelectCar by rememberUpdatedState(onSelectCar)
     val currentOnSelectDirection by rememberUpdatedState(onSelectDirection)
+    val currentOnMyCarTap by rememberUpdatedState(onMyCarTap)
     val context = LocalContext.current
     val sceneView = remember { Scene3DView(context) }
     DisposableEffect(sceneView) {
         sceneView.onResume()
         onDispose { sceneView.onPause() }
     }
+    // 지도에서 받은 건물 (구역이 바뀔 때만 다시 만든다) 과, 같은 기준점에서 본 내 위치
+    val sceneBuildings = remember(buildings) {
+        buildings?.boxes?.map { Scene3DView.Building(it.id, it.east, it.north, it.width, it.depth, it.bearingDeg, it.height) }.orEmpty()
+    }
+    val ego = if (buildings != null && myFix != null) {
+        Scene3DView.Ego(
+            east = OsmBuildings.east(myFix.longitude, buildings.originLat, buildings.originLng),
+            north = OsmBuildings.north(myFix.latitude, buildings.originLat),
+            headingDeg = myFix.heading,
+            speedMps = myFix.speedMps ?: 0f,
+            atMillis = myFix.timestampMillis,
+        )
+    } else null
     SideEffect {
         sceneView.frame = Scene3DView.Frame(
             cars = cars.map { car ->
@@ -160,15 +178,17 @@ fun BirdEyePanel(
                     lateral = l,
                     forward = f,
                     headingDeg = car.relativeHeadingDeg ?: 0f,
-                    type = CarLook.typeOf(car.plate),
+                    type = car.carType ?: CarLook.typeOf(car.plate),
                     skin = car.skin ?: CarLook.defaultSkinOf(car.plate),
                     selected = car.plate == selectedPlate,
                 )
             },
-            myType = CarLook.typeOf(myPlate),
+            myType = myType,
             mySkin = mySkin,
             rearM = rearM,
-            speedMps = speedMps,
+            speedMps = myFix?.speedMps ?: 0f,
+            buildings = sceneBuildings,
+            ego = ego,
         )
     }
 
@@ -212,7 +232,12 @@ fun BirdEyePanel(
                                 return hypot(c.first - up.position.x, c.second - up.position.y)
                             }
                             val hit = currentCars.minByOrNull { distanceTo(it) }?.takeIf { distanceTo(it) <= 72.dp.toPx() }
-                            if (hit != null) {
+                            // 내 차를 누르면 '내 차 고르기' 를 연다 (더 가까운 다른 차가 있으면 그 차 선택이 먼저)
+                            val me = camera.project(0f, CAR_HEIGHT_M / 2, 0f)
+                            val toMe = if (me == null) Float.MAX_VALUE else hypot(me.first - up.position.x, me.second - up.position.y)
+                            if (toMe <= 64.dp.toPx() && (hit == null || toMe < distanceTo(hit))) {
+                                currentOnMyCarTap()
+                            } else if (hit != null) {
                                 currentOnSelectCar(hit.plate)
                             } else {
                                 // 빈 도로: 그 방향 칸의 차를 선택
@@ -225,7 +250,7 @@ fun BirdEyePanel(
                 val camera = Camera3D(size.width, size.height, rearM)
                 // 이름표는 차 꽁무니 바로 뒤 바닥 자리에 (화면에서는 차 아래)
                 camera.project(0f, 0f, CAR_LENGTH_M / 2 + TAG_GAP_M)?.let {
-                    drawTag(textMeasurer, "내 차", Offset(it.first, it.second), RoadColors.Accent, Color.White, bold = true)
+                    drawTag(textMeasurer, "내 차 · 눌러서 꾸미기", Offset(it.first, it.second), RoadColors.Accent, Color.White, bold = true)
                 }
                 cars.forEach { car ->
                     val (f, l) = placement(car, rearM)

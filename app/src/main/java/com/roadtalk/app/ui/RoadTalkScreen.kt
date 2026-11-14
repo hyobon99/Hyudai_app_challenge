@@ -59,12 +59,14 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     val notice by vm.notice.collectAsStateWithLifecycle()
     val myPlate by vm.myPlate.collectAsStateWithLifecycle()
     val mySkin by vm.mySkin.collectAsStateWithLifecycle()
+    val myCarType by vm.myCarType.collectAsStateWithLifecycle()
+    val garageOpen by vm.garageOpen.collectAsStateWithLifecycle()
+    val buildings by vm.buildings.collectAsStateWithLifecycle()
     val myLocation by vm.myLocation.collectAsStateWithLifecycle()
     val backendStatus by vm.backendStatus.collectAsStateWithLifecycle()
     val backendName by vm.backendName.collectAsStateWithLifecycle()
     var editingPlate by remember { mutableStateOf(false) }
     var editingServer by remember { mutableStateOf(false) }
-    var pickingSkin by remember { mutableStateOf(false) }
 
     Box(
         Modifier
@@ -81,7 +83,7 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                 voice = voice,
                 mySkin = mySkin,
                 onEditPlate = { editingPlate = true },
-                onPickSkin = { pickingSkin = true },
+                onPickSkin = vm::openGarage,
                 onEditServer = { editingServer = true },
             )
             Spacer(Modifier.height(16.dp))
@@ -92,9 +94,11 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     incoming = banner,
                     sent = sent,
                     voice = voice,
-                    myPlate = myPlate,
+                    myType = myCarType,
                     mySkin = mySkin,
-                    speedMps = myLocation?.speedMps ?: 0f,
+                    onMyCarTap = vm::openGarage,
+                    myFix = myLocation,
+                    buildings = buildings,
                     onSelectCar = vm::select,
                     onSelectDirection = vm::selectDirection,
                     onTalkStart = vm::startTalking,
@@ -103,16 +107,29 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                         .weight(0.42f)
                         .fillMaxHeight(),
                 )
-                NavPanel(
-                    myFix = myLocation,
-                    cars = cars,
-                    navi = navi,
-                    onRequestRoute = vm::startRouteTo,
-                    onCancelRoute = vm::cancelRoute,
-                    modifier = Modifier
-                        .weight(0.58f)
-                        .fillMaxHeight(),
-                )
+                if (garageOpen) {
+                    GaragePanel(
+                        myType = myCarType,
+                        mySkin = mySkin,
+                        onPickType = vm::setMyCarType,
+                        onPickSkin = vm::setMySkin,
+                        onClose = vm::closeGarage,
+                        modifier = Modifier
+                            .weight(0.58f)
+                            .fillMaxHeight(),
+                    )
+                } else {
+                    NavPanel(
+                        myFix = myLocation,
+                        cars = cars,
+                        navi = navi,
+                        onRequestRoute = vm::startRouteTo,
+                        onCancelRoute = vm::cancelRoute,
+                        modifier = Modifier
+                            .weight(0.58f)
+                            .fillMaxHeight(),
+                    )
+                }
             }
         }
 
@@ -148,16 +165,6 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
             current = myPlate,
             onSave = vm::setMyPlate,
             onDismiss = { editingPlate = false },
-        )
-    }
-    if (pickingSkin) {
-        SkinDialog(
-            current = mySkin,
-            onPick = {
-                vm.setMySkin(it)
-                pickingSkin = false
-            },
-            onDismiss = { pickingSkin = false },
         )
     }
     if (editingServer) {
@@ -252,7 +259,7 @@ private fun TopBar(
                     .background(Color(CarLook.SKIN_COLORS[mySkin.coerceIn(0, CarLook.SKIN_COUNT - 1)]))
             )
             Spacer(Modifier.width(8.dp))
-            Text("차 색 ✎", fontSize = 15.sp, color = RoadColors.TextPrimary)
+            Text("내 차 꾸미기", fontSize = 15.sp, color = RoadColors.TextPrimary)
         }
         Spacer(Modifier.width(8.dp))
         Pill("서버: $backend ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditServer))
@@ -297,39 +304,6 @@ private fun IncomingBanner(message: RoadMessage) {
         Text("${message.peerPosition?.label ?: "근처 차"}가 보낸 메시지", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
         Text(message.text, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
     }
-}
-
-/** 내 차 색 고르기. 고른 색은 서버를 거쳐 다른 차 화면에도 그대로 보인다 */
-@Composable
-private fun SkinDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("내 차 색 고르기") },
-        text = {
-            Column {
-                Text("다른 차의 화면에도 이 색으로 보여요.", fontSize = 14.sp)
-                Spacer(Modifier.height(16.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    CarLook.SKIN_COLORS.forEachIndexed { index, argb ->
-                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onPick(index) }) {
-                            Box(
-                                Modifier
-                                    .size(56.dp)
-                                    .clip(CircleShape)
-                                    .background(if (index == current) RoadColors.Accent else Color.Transparent)
-                                    .padding(4.dp)
-                                    .clip(CircleShape)
-                                    .background(Color(argb))
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(CarLook.SKIN_NAMES[index], fontSize = 13.sp)
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
-    )
 }
 
 @Composable

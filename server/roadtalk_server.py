@@ -157,6 +157,7 @@ class Handler(BaseHTTPRequestHandler):
             "fixedAt": None if body.get("fixedAt") is None else int(body["fixedAt"]),  # 측정 시각 (서버 시계 ms, 앱이 시계 차이를 재서 환산)
             "accuracy": num_or_none(body.get("accuracy")),    # 오차 반경 m
             "skin": body["skin"] if isinstance(body.get("skin"), int) and 0 <= body["skin"] <= 5 else None,  # 운전자가 고른 차 색
+            "car": body["car"] if isinstance(body.get("car"), int) and 0 <= body["car"] <= 9 else None,     # 운전자가 고른 차종
             "updatedAt": now_ms(),
         }
         with lock:

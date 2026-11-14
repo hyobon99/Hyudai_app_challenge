@@ -41,6 +41,8 @@ data class NearbyCar(
     val relativeHeadingDeg: Float? = null,
     /** 그 차 운전자가 고른 차 색 (0~5, ui/scene3d/CarLook). 고르지 않았거나 서버가 알려 주지 않으면 null */
     val skin: Int? = null,
+    /** 그 차 운전자가 고른 차종 (0~9). 고르지 않았으면 null → 차량번호로 정한다 */
+    val carType: Int? = null,
 )
 
 /**

@@ -6,12 +6,14 @@
 <폴더> 안에 있어야 하는 것 (README 의 '3D 에셋' 참고):
     cars/Models/*.fbx, cars/Textures/Palette_*.png      ← Broken Vector "Low Poly Cars"
     road/GLB/SM_Road_Straight.glb 등, road/Textures/T_Palette.png   ← GGiedrius "Low Poly City & Traffic Pack: FREE Lite"
+    city/Models/GLB format/building-*.glb, .../Textures/colormap.png  ← Kenney "City Kit (Commercial)" (없으면 건물은 건너뛴다)
 
 결과: app/src/main/assets/scene3d/
     car_<n>.mesh        차 10종 (0~5 승용차, 6 경찰차, 7 버스, 8·9 트럭)
     skin_<n>.png        차 색 6종 (0 파랑, 1 빨강, 2 노랑, 3 초록, 4 보라, 5 은색)
     road.mesh           3차선 도로 10m 한 토막 (Road Straight 를 차선 폭 3.5m 로 넓혀 다시 이어 붙인 것)
     tree.mesh, lamp.mesh, city.png (도로·나무·가로등 색)
+    bld_<nn>.mesh       건물 19종 (바닥을 가로·세로 1m 로 맞춘 것. 앱이 지도 건물의 크기에 맞게 늘려 쓴다), buildings.png (건물 색)
 
 메시 파일: "RTM1", 정점 수(uint32), 정점마다 float32 8개 (x, y, z, nx, ny, nz, u, v). 삼각형 3개씩, 인덱스 없음.
 좌표: 미터, Y 가 위, 차 앞쪽 = -Z, 오른쪽 = +X, 바닥 = y 0. UV 원점은 그림의 왼쪽 위.
@@ -99,6 +101,20 @@ def convert_road(src):
     return [(v[0] * k,) + tuple(v[1:]) for v in parts]
 
 
+def convert_building(src):
+    """건물 → 바닥이 가로·세로 1m (가운데가 원점) 가 되게 맞춘다. 높이는 '더 긴 바닥 변 = 1' 기준이라 건물의 가로세로비가 남는다"""
+    verts = convert_prop(src)
+    xs = [v[0] for v in verts]
+    zs = [v[2] for v in verts]
+    cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
+    wx, wz = max(xs) - min(xs), max(zs) - min(zs)
+    big = max(wx, wz)
+    return [((v[0] - cx) / wx, v[1] / big, (v[2] - cz) / wz) + tuple(v[3:]) for v in verts]
+
+
+BUILDINGS = ["building-%s" % c for c in "abcdefghijklmn"] + ["building-skyscraper-%s" % c for c in "abcde"]
+
+
 def convert_prop(src):
     return [(p[0], p[1], p[2], n[0], n[1], n[2], uv[0], uv[1])
             for m in glb_reader.load(src) for p, n, uv in zip(m.positions, m.normals, m.uvs)]
@@ -141,6 +157,15 @@ def main():
     shutil.copyfile(os.path.join(base, "road", "Textures", "T_Palette.png"), os.path.join(OUT, "city.png"))
     xs = [v[0] for v in road]
     print("road    삼각형 %d  폭 %.2f ~ %.2f m" % (len(road) // 3, min(xs), max(xs)))
+    city_dir = os.path.join(base, "city", "Models", "GLB format")
+    if os.path.isdir(city_dir):
+        for i, name in enumerate(BUILDINGS):
+            verts = convert_building(os.path.join(city_dir, name + ".glb"))
+            write_mesh(os.path.join(OUT, "bld_%02d.mesh" % i), verts)
+            print("bld_%02d  %-24s 삼각형 %4d  높이/바닥 %.2f" % (i, name, len(verts) // 3, max(v[1] for v in verts)))
+        shutil.copyfile(os.path.join(city_dir, "Textures", "colormap.png"), os.path.join(OUT, "buildings.png"))
+    else:
+        print("건물 에셋(city/)이 없어 건물은 건너뜁니다")
     print("→", os.path.normpath(OUT))
 
     if preview_path:

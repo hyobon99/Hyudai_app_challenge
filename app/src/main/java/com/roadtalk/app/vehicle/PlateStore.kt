@@ -24,8 +24,16 @@ class PlateStore(context: Context) {
         prefs.edit().putInt(KEY_SKIN, skin).apply()
     }
 
+    /** 고른 차종 (0~9). 아직 고르지 않았으면 null */
+    fun loadType(): Int? = prefs.getInt(KEY_TYPE, -1).takeIf { it >= 0 }
+
+    fun saveType(type: Int) {
+        prefs.edit().putInt(KEY_TYPE, type).apply()
+    }
+
     companion object {
         private const val KEY = "my_plate"
+        private const val KEY_TYPE = "my_car_type"
         private const val KEY_SKIN = "my_skin"
         private val PLATE_REGEX = Regex("""(\d{2,3})\s*([가-힣])\s*(\d{4})""")
 

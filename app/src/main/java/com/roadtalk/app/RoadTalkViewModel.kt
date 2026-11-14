@@ -14,6 +14,8 @@ import com.roadtalk.app.navi.NaviGateway
 import com.roadtalk.app.net.FirestoreRoadTalkRepository
 import com.roadtalk.app.net.HttpRoadTalkRepository
 import com.roadtalk.app.net.ServerStore
+import com.roadtalk.app.map.BuildingsSource
+import com.roadtalk.app.map.OsmBuildings
 import com.roadtalk.app.ui.scene3d.CarLook
 import com.roadtalk.app.vehicle.PlateStore
 import com.roadtalk.app.net.MyPosition
@@ -89,6 +91,20 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     private val _mySkin = MutableStateFlow(plateStore.loadSkin() ?: CarLook.defaultSkinOf(_myPlate.value))
     val mySkin: StateFlow<Int> = _mySkin.asStateFlow()
 
+    /** 내 차종 (0~9). 고르지 않았으면 차량번호로 정해진 차종 */
+    private val _myCarType = MutableStateFlow(plateStore.loadType() ?: CarLook.typeOf(_myPlate.value))
+    val myCarType: StateFlow<Int> = _myCarType.asStateFlow()
+
+    /** 지도에서 받아 온 내 주변 건물 (3D 화면에 세운다). 아직 못 받았으면 null */
+    private val buildingsSource = BuildingsSource(viewModelScope) {
+        runCatching { app.assets.open("buildings_demo.json").bufferedReader().use { it.readText() } }.getOrNull()
+    }
+    val buildings: StateFlow<OsmBuildings.Area?> = buildingsSource.area
+
+    /** '내 차 고르기' 화면이 열려 있는지 (열리면 오른쪽 지도 자리에 뜬다) */
+    private val _garageOpen = MutableStateFlow(false)
+    val garageOpen: StateFlow<Boolean> = _garageOpen.asStateFlow()
+
     init {
         viewModelScope.launch {
             vehicle.state.collect { s ->
@@ -112,7 +128,10 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
             _repository.flatMapLatest { it.incoming }.collect(::onIncoming)
         }
         viewModelScope.launch {
-            combine(_repository, _mySkin) { repo, skin -> repo to skin }.collect { (repo, skin) -> repo.mySkin = skin }
+            combine(_repository, _mySkin, _myCarType) { repo, skin, type -> Triple(repo, skin, type) }.collect { (repo, skin, type) ->
+                repo.mySkin = skin
+                repo.myCarType = type
+            }
         }
         viewModelScope.launch {
             combine(_repository, _myPlate, location.location) { repo, plate, fix -> Triple(repo, plate, fix) }
@@ -121,6 +140,7 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
                         MyPosition(it.latitude, it.longitude, it.heading, it.speedMps, it.timestampMillis, it.accuracyMeters)
                     }
                     repo.updateMyPresence(plate, position)
+                    fix?.let { buildingsSource.onLocation(it.latitude, it.longitude) }
                 }
         }
         viewModelScope.launch {
@@ -142,9 +162,22 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     fun setMySkin(skin: Int) {
         val value = skin.coerceIn(0, CarLook.SKIN_COUNT - 1)
         plateStore.saveSkin(value)
-        if (_mySkin.value == value) return
         _mySkin.value = value
-        showNotice("내 차 색을 ${CarLook.SKIN_NAMES[value]}(으)로 바꿨어요.")
+    }
+
+    /** 내 차종 고르기 (0~9). 다른 차 화면에도 이 모양으로 보인다 */
+    fun setMyCarType(type: Int) {
+        val value = type.coerceIn(0, CarLook.TYPE_COUNT - 1)
+        plateStore.saveType(value)
+        _myCarType.value = value
+    }
+
+    fun openGarage() {
+        _garageOpen.value = true
+    }
+
+    fun closeGarage() {
+        _garageOpen.value = false
     }
 
     /** 내 차량번호 등록. 형식이 맞지 않으면 false */
@@ -153,6 +186,7 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         plateStore.save(plate)
         _myPlate.value = plate
         if (plateStore.loadSkin() == null) _mySkin.value = CarLook.defaultSkinOf(plate)
+        if (plateStore.loadType() == null) _myCarType.value = CarLook.typeOf(plate)
         showNotice("내 차량번호를 $plate 로 등록했어요.")
         return true
     }
