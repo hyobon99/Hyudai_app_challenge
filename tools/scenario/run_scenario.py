@@ -211,8 +211,10 @@ def scenario_merge(dev_a, dev_b):
     base = 110.0
     cruise = 10.0   # 36 km/h
     cars = [
-        # 6.6초에 급브레이크 (1.3초 만에 36 → 20 km/h, 약 -3.5 m/s²), 잠깐 버틴 뒤 다시 가속
-        Car("A", "99허 0000", "emulator", base, Line([(0, cruise), (6.6, cruise), (7.9, 5.5), (8.4, 5.5), (10.9, cruise), (60, cruise)]),
+        # 6.6초에 급브레이크 (1.3초 만에 36 → 20 km/h, 약 -3.5 m/s²), 잠깐 버틴 뒤 다시 가속.
+        # 양보하느라 약 17m 까지 벌어진 사이를 조금 빨리 달려(41 km/h) 다시 좁혀서, 앞차와 약 9.5m 간격으로 따라간다
+        Car("A", "99허 0000", "emulator", base,
+            Line([(0, cruise), (6.6, cruise), (7.9, 5.5), (8.4, 5.5), (10.9, cruise), (12.0, 11.5), (15.6, 11.5), (17.1, cruise), (60, cruise)]),
             Ease([(0, -1.75)]), color=BLUE, label="A · 내 차", device=dev_a),
         # A 보다 6m 앞(차 사이 1.4m)에서 2.2초 만에 차로를 바꾼다
         Car("B", "12가 3690", "emulator", base + 6.0, Line([(0, cruise), (60, cruise)]),
