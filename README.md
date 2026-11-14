@@ -10,7 +10,7 @@
 - **음성으로 보내기**: "음성으로 말하기" 버튼을 한 번 누르고 "뒷차한테 고맙다고 해줘"라고 말하면, AI(TypeSafe AI의 Jev)가 받을 차와 메시지 목록 23개 중 가장 가까운 말을 골라 보낸다
 - **메시지 함**: 보낼 수 있는 말 23개 중 6개를 운전자가 골라 기본 메시지 함에 담는다. 인사뿐 아니라 '라이트 꺼져 있어요', '주유구가 열려 있어요' 같은 안전 알림도 있다
 - **받은 메시지 읽어 주기**: 상대 차 위에 말풍선으로 뜨고, TextToSpeech SDK가 "앞차가 보낸 메시지. 감사합니다"처럼 읽어 준다
-- **욕설·위험한 말 차단**: 금칙어 사전과 AI 판정으로 걸러 보내지 않는다. 도로 화면 가운데에 "전송에 실패했습니다"가 뜨고 소리로도 말해 준다
+- **욕설 및 부적절한 말 차단**: 금칙어 사전과 AI 판정으로 걸러 보내지 않는다. 도로 화면 가운데에 "전송에 실패했습니다"가 뜨고 소리로도 말해 준다
 - **받으면 '띵~'**: 다른 차의 메시지가 도착하면 종소리가 한 번 울리고 읽어 준다 (보내는 쪽에서는 울리지 않는다)
 - **순정 내비 연동**: NaviHelper SDK로 다음 회전, 목적지, 남은 거리·시간, 제한속도를 보여 주고, 지도에서 고른 곳으로 경로 안내를 요청한다
 - **내 차 고르기**: 쇼룸 화면에서 차종 6가지와 색 6가지를 고르면 다른 차 화면에도 그 모습으로 보인다
@@ -83,13 +83,13 @@
 ### 왼쪽: 3D 도로 (`ui/BirdEyeView.kt`, `ui/scene3d/`)
 - 내 차 뒤 위에서 본 3D 도로에 Car-ind CHAT을 켠 차만 GPS 상대 위치에 표시한다. 차를 누르면 그 차가 받는 차로 선택된다 (차 아래 네온 고리, 처음에는 가장 가까운 차)
 - 추가 라이브러리 없이 OpenGL ES 2.0으로 직접 그린다 (`ui/scene3d/Scene3DView.kt`). 내 속도만큼 도로가 뒤로 흘러간다. 카메라는 내 차 뒤 위에서 약 32도로 내려다보고 거리는 고정이다 (뒤 약 8m부터 앞은 지평선까지 보인다 · `ui/scene3d/Camera3D.kt`). 그보다 뒤에 있는 차는 화면 맨 아래에 걸치게 그린다
-- **주변 차로 보는 범위** (`net/Perception.kt`): 차의 카메라 인식 거리를 바탕으로 방향마다 거리를 정했다 (실제 카메라를 쓰는 것은 아니다)
+- **주변 차 인식 범위** (`net/Perception.kt`): 차의 카메라 인식 거리를 바탕으로 방향마다 거리를 정했다 (실제 카메라를 쓰는 것은 아니다)
   - 정면(좌우 약 17도) 180m · 정면 좌우 약 25도 100m · 앞 옆 80m · 뒤 옆 100m · 바로 뒤 50m
   - 범위 밖의 차는 3D에는 안 보이고 오른쪽 지도에만 점으로 나온다
 - **지도 기반 주변 모습** (`map/`): 내 위치 둘레의 OpenStreetMap 자료로 실제 모습을 세운다
-  - 건물: 바닥 윤곽 그대로 벽을 세우고, 높이는 지도의 높이·층수(없으면 바닥 넓이로 짐작)를 쓴다 (`map/CityMesh.kt`)
+  - 건물: 바닥 윤곽 그대로 벽을 세우고, 높이는 지도의 높이를 쓴다
   - 차로: 내가 달리는 길의 차로 수대로 그리고, 양방향 도로면 노란 중앙선을 긋는다
-  - 교차로·횡단보도·신호등: 지도의 위치·방향·폭대로 그린다. 신호등은 지금 신호 색을 알 수 없어서 불이 꺼진 모습으로 그린다
+  - 교차로·횡단보도·신호등: 지도의 위치·방향·폭대로 그린다.
   - 시연 위치 일대(강남역 북쪽 반경 750m)는 앱에 넣어 두었고(`assets/buildings_demo.json`), 그 밖에서는 Overpass API에서 그때그때 받는다. 다른 곳을 넣어 두려면 `python tools/assets/fetch_buildings.py 위도 경도 반경`
   - 한계: 내 길은 굽은 모양을 따르지 않고 곧게 그린다. GPS 오차만큼 내 차가 옆 차로에 놓일 수 있다
 - **차로 지키기** (`ui/scene3d/Lanes.kt`): 내 차와 내 길 위의 주변 차는 가장 가까운 차로의 가운데에 그린다. GPS로 계산한 좌우 위치는 1~2m씩 틀릴 수 있어서, 그대로 그리면 차선을 밟고 달리는 것처럼 보이기 때문이다. 차로를 바꾸는 차는 옆 차로 가운데로 부드럽게 옮겨 간다. 지도의 차로 수는 없거나 틀릴 수 있어서, 내 옆 차로에 차가 있으면 그 차가 길 안에 들어오도록 내 차로를 정하고 모자라면 차로를 늘려 그린다
@@ -227,8 +227,8 @@ Firestore 구조: `presence/{번호}` (위치·geohash), `inboxes/{번호}/messa
 - 준비: 서버 실행, 에뮬레이터 2대에 Car-ind CHAT 실행(번호 `99허 0000` / `12가 3690`, 서버 주소 `10.0.2.2:8090`), `pip install pillow`, ffmpeg
 
 ```
-python tools/scenario/run_scenario.py merge     # 급한 끼어들기 → 급제동으로 양보 → 인사 (테헤란로)
-python tools/scenario/run_scenario.py yield     # 좁은 골목에서 마주침 → 양보 (테헤란로8길)
+python tools/scenario/run_scenario.py merge     # 급한 끼어들기 → 급제동으로 양보 → 인사
+python tools/scenario/run_scenario.py yield     # 좁은 골목에서 마주침 → 양보
 python tools/scenario/run_scenario.py merge --preview    # 에뮬레이터 없이 왼쪽 그림만 미리 보기
 python tools/scenario/run_scenario.py merge --live --loop   # 영상으로 만들지 않고 지금 돌아가는 모습을 창으로 보기
 ```
@@ -245,7 +245,7 @@ python tools/scenario/run_scenario.py merge --live --loop   # 영상으로 만�
 | 쓰는 것 | 출처 (만든 사람) | 조건 |
 |---|---|---|
 | 차 10종 + 색 팔레트 6종 | [Low Poly Cars](https://brokenvector.itch.io/low-poly-cars) — Broken Vector | 무료 배포. 페이지에 라이선스 문구가 따로 없다 |
-| 도로·나무·가로등·신호등 | [Low Poly City & Traffic Pack: FREE Lite](https://ggiedrius.itch.io/lowpoly-city-traffic-lite) — GGiedrius | 개인·상업 프로젝트에 사용 가능. 모델을 에셋으로 되팔거나 재배포하지 말 것 |
+| 도로·나무·가로등·신호등 | [Low Poly City & Traffic Pack: FREE Lite](https://ggiedrius.itch.io/lowpoly-city-traffic-lite) — GGiedrius | 개인·상업 프로젝트에 사용 가능. 모델을 에셋으로 되팔거나 재배포하지 말 것 (팩 안의 README.txt. 배포 페이지에는 "되팔지 말 것"만 적혀 있다) |
 | 건물 윤곽·높이, 도로(차로 수), 횡단보도, 신호등 위치 (`assets/buildings_demo.json`) | OpenStreetMap | ODbL — "© OpenStreetMap contributors" 표기 |
 
 모델의 권리는 각 제작자에게 있다. 다른 곳에 쓰려면 위 페이지에서 원본을 받아 조건을 확인할 것.
