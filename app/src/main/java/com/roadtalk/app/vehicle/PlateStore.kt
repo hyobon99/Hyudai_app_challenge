@@ -17,8 +17,16 @@ class PlateStore(context: Context) {
         prefs.edit().putString(KEY, plate).apply()
     }
 
+    /** 고른 차 색 (0~5). 아직 고르지 않았으면 null */
+    fun loadSkin(): Int? = prefs.getInt(KEY_SKIN, -1).takeIf { it >= 0 }
+
+    fun saveSkin(skin: Int) {
+        prefs.edit().putInt(KEY_SKIN, skin).apply()
+    }
+
     companion object {
         private const val KEY = "my_plate"
+        private const val KEY_SKIN = "my_skin"
         private val PLATE_REGEX = Regex("""(\d{2,3})\s*([가-힣])\s*(\d{4})""")
 
         /** "12가3456" -> "12가 3456". 형식이 아니면 null */

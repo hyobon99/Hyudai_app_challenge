@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import com.roadtalk.app.ui.scene3d.CarLook
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -57,11 +58,13 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     val sent by vm.sent.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
     val myPlate by vm.myPlate.collectAsStateWithLifecycle()
+    val mySkin by vm.mySkin.collectAsStateWithLifecycle()
     val myLocation by vm.myLocation.collectAsStateWithLifecycle()
     val backendStatus by vm.backendStatus.collectAsStateWithLifecycle()
     val backendName by vm.backendName.collectAsStateWithLifecycle()
     var editingPlate by remember { mutableStateOf(false) }
     var editingServer by remember { mutableStateOf(false) }
+    var pickingSkin by remember { mutableStateOf(false) }
 
     Box(
         Modifier
@@ -76,7 +79,9 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                 backendStatus = backendStatus,
                 vehicle = vehicle,
                 voice = voice,
+                mySkin = mySkin,
                 onEditPlate = { editingPlate = true },
+                onPickSkin = { pickingSkin = true },
                 onEditServer = { editingServer = true },
             )
             Spacer(Modifier.height(16.dp))
@@ -87,6 +92,9 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     incoming = banner,
                     sent = sent,
                     voice = voice,
+                    myPlate = myPlate,
+                    mySkin = mySkin,
+                    speedMps = myLocation?.speedMps ?: 0f,
                     onSelectCar = vm::select,
                     onSelectDirection = vm::selectDirection,
                     onTalkStart = vm::startTalking,
@@ -140,6 +148,16 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
             current = myPlate,
             onSave = vm::setMyPlate,
             onDismiss = { editingPlate = false },
+        )
+    }
+    if (pickingSkin) {
+        SkinDialog(
+            current = mySkin,
+            onPick = {
+                vm.setMySkin(it)
+                pickingSkin = false
+            },
+            onDismiss = { pickingSkin = false },
         )
     }
     if (editingServer) {
@@ -209,13 +227,33 @@ private fun TopBar(
     backendStatus: String?,
     vehicle: VehicleGateway.State,
     voice: VoiceGateway.State,
+    mySkin: Int,
     onEditPlate: () -> Unit,
+    onPickSkin: () -> Unit,
     onEditServer: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("Car-ind CHAT", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = RoadColors.TextPrimary)
         Spacer(Modifier.width(20.dp))
         Pill("내 차 $myPlate ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditPlate))
+        Spacer(Modifier.width(8.dp))
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(50))
+                .background(RoadColors.SurfaceHigh)
+                .clickable(onClick = onPickSkin)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier
+                    .size(16.dp)
+                    .clip(CircleShape)
+                    .background(Color(CarLook.SKIN_COLORS[mySkin.coerceIn(0, CarLook.SKIN_COUNT - 1)]))
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("차 색 ✎", fontSize = 15.sp, color = RoadColors.TextPrimary)
+        }
         Spacer(Modifier.width(8.dp))
         Pill("서버: $backend ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditServer))
         Spacer(Modifier.width(8.dp))
@@ -259,6 +297,39 @@ private fun IncomingBanner(message: RoadMessage) {
         Text("${message.peerPosition?.label ?: "근처 차"}가 보낸 메시지", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
         Text(message.text, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
     }
+}
+
+/** 내 차 색 고르기. 고른 색은 서버를 거쳐 다른 차 화면에도 그대로 보인다 */
+@Composable
+private fun SkinDialog(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("내 차 색 고르기") },
+        text = {
+            Column {
+                Text("다른 차의 화면에도 이 색으로 보여요.", fontSize = 14.sp)
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    CarLook.SKIN_COLORS.forEachIndexed { index, argb ->
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { onPick(index) }) {
+                            Box(
+                                Modifier
+                                    .size(56.dp)
+                                    .clip(CircleShape)
+                                    .background(if (index == current) RoadColors.Accent else Color.Transparent)
+                                    .padding(4.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(argb))
+                            )
+                            Spacer(Modifier.height(6.dp))
+                            Text(CarLook.SKIN_NAMES[index], fontSize = 13.sp)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("닫기") } },
+    )
 }
 
 @Composable

@@ -23,6 +23,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.getValue
@@ -46,6 +48,8 @@ import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.input.pointer.changedToUp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.layout.positionOnScreen
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.delay
@@ -64,6 +68,9 @@ import com.roadtalk.app.net.Geo
 import com.roadtalk.app.net.NearbyCar
 import com.roadtalk.app.net.RelativePosition
 import com.roadtalk.app.net.RoadMessage
+import com.roadtalk.app.ui.scene3d.Camera3D
+import com.roadtalk.app.ui.scene3d.CarLook
+import com.roadtalk.app.ui.scene3d.Scene3DView
 import com.roadtalk.app.voice.VoiceGateway
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -79,11 +86,19 @@ private const val FRONT_M = 12f
 private const val REAR_M = 7f
 private const val LANE_M = 3.5f
 private const val CAR_LENGTH_M = 4.6f
-private const val CAR_WIDTH_M = 1.9f
+private const val CAR_HEIGHT_M = 1.6f
+/** 이름표를 차 꽁무니에서 얼마나 뒤에 둘지 (m) */
+private const val TAG_GAP_M = 0.7f
+/** 이보다 멀리 있는 차는 이 자리까지 당겨서 그린다 (m) */
+private const val MAX_SHOWN_FRONT_M = 70f
+private const val MAX_SHOWN_SIDE_M = 6.8f
+private val SKY_COLOR = Color(0xFFECEEF2)
+private val TAG_BACKGROUND = Color(0xCC1B2230)
 /**
- * 위에서 내려다본(bird's-eye) 도로 화면 + 말하기 버튼.
+ * 내 차 뒤 위에서 본 3D 도로 화면 + 말하기 버튼.
  * 실제 주변 풍경이 아니라 Car-ind CHAT 을 켠 차만, GPS 로 계산한 상대 위치 벡터(앞뒤·좌우 m) 자리에 그린다.
- *  - 차를 탭: 그 차를 받는 사람으로 선택 (파란 테두리). 말할 때 대상을 말하지 않으면 이 차에게 간다
+ * 3D 그림은 [Scene3DView] (OpenGL) 가 그리고, 그 위에 차 이름표와 말풍선을 같은 카메라([Camera3D])로 자리를 계산해 얹는다.
+ *  - 차를 탭: 그 차를 받는 사람으로 선택 (파란 빛 고리). 말할 때 대상을 말하지 않으면 이 차에게 간다
  *  - 빈 도로를 탭: 그 자리가 속한 8방향 칸에서 가장 가까운 차를 선택
  *  - 아래 버튼을 꾹 누른 채 말하기: 누르고 있는 동안 음성을 인식하고(STT SDK), 손을 떼면 인식된 말이
  *    정해진 메시지(chat/PresetMessages.kt) 중 가장 가까운 것으로 바뀌어 전송된다
@@ -95,6 +110,9 @@ fun BirdEyePanel(
     incoming: RoadMessage?,
     sent: RoadMessage?,
     voice: VoiceGateway.State,
+    myPlate: String,
+    mySkin: Int,
+    speedMps: Float,
     onSelectCar: (String) -> Unit,
     onSelectDirection: (RelativePosition) -> Unit,
     onTalkStart: () -> Unit,
@@ -106,12 +124,10 @@ fun BirdEyePanel(
     val cars = rememberSmoothedCars(cars)
     // 위치가 계속 갱신돼도 탭 처리가 최신 위치를 보도록
     val currentCars by rememberUpdatedState(cars)
-    // 기본은 크게(앞 12m·뒤 7m) 보여주고, 그보다 멀리 있는 차가 있으면 그 차가 들어올 만큼만 부드럽게 넓힌다
+    // 기본은 가깝게(뒤 7m 까지) 보여주고, 그보다 뒤에 있는 차가 있으면 그 차가 들어올 만큼만 카메라를 부드럽게 물린다
     val rangeSteps = remember { RangeSteps() }
-    val (targetFront, targetRear) = rangeSteps.update(cars)
-    val frontM by animateFloatAsState(targetFront, animationSpec = tween(600), label = "roadFront")
+    val (_, targetRear) = rangeSteps.update(cars)
     val rearM by animateFloatAsState(targetRear, animationSpec = tween(600), label = "roadRear")
-    val currentFront by rememberUpdatedState(frontM)
     val currentRear by rememberUpdatedState(rearM)
     var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -120,15 +136,41 @@ fun BirdEyePanel(
         while (true) {
             delay(400)
             if (canvasSize.width == 0) continue
-            val scene = Scene(canvasSize.width.toFloat(), canvasSize.height.toFloat(), currentFront, currentRear)
+            val camera = Camera3D(canvasSize.width.toFloat(), canvasSize.height.toFloat(), currentRear)
             currentCars.forEach { car ->
-                val c = scene.toScreen(placement(car, scene))
-                Log.d(UI_LOG_TAG, "car ${Geo.plateKey(car.plate)} ${(canvasOrigin.x + c.x).toInt()} ${(canvasOrigin.y + c.y).toInt()}")
+                val (f, l) = placement(car, currentRear)
+                val c = camera.project(l, CAR_HEIGHT_M / 2, -f) ?: return@forEach
+                Log.d(UI_LOG_TAG, "car ${Geo.plateKey(car.plate)} ${(canvasOrigin.x + c.first).toInt()} ${(canvasOrigin.y + c.second).toInt()}")
             }
         }
     }
     val currentOnSelectCar by rememberUpdatedState(onSelectCar)
     val currentOnSelectDirection by rememberUpdatedState(onSelectDirection)
+    val context = LocalContext.current
+    val sceneView = remember { Scene3DView(context) }
+    DisposableEffect(sceneView) {
+        sceneView.onResume()
+        onDispose { sceneView.onPause() }
+    }
+    SideEffect {
+        sceneView.frame = Scene3DView.Frame(
+            cars = cars.map { car ->
+                val (f, l) = placement(car, rearM)
+                Scene3DView.Car(
+                    lateral = l,
+                    forward = f,
+                    headingDeg = car.relativeHeadingDeg ?: 0f,
+                    type = CarLook.typeOf(car.plate),
+                    skin = car.skin ?: CarLook.defaultSkinOf(car.plate),
+                    selected = car.plate == selectedPlate,
+                )
+            },
+            myType = CarLook.typeOf(myPlate),
+            mySkin = mySkin,
+            rearM = rearM,
+            speedMps = speedMps,
+        )
+    }
 
     Column(
         modifier
@@ -149,8 +191,9 @@ fun BirdEyePanel(
                 .weight(1f)
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
-                .background(RoadColors.Background)
+                .background(SKY_COLOR)
         ) {
+            AndroidView(factory = { sceneView }, modifier = Modifier.fillMaxSize())
             Canvas(
                 Modifier
                     .fillMaxSize()
@@ -162,76 +205,60 @@ fun BirdEyePanel(
                         awaitEachGesture {
                             awaitFirstDown()
                             val up = waitForUpOrCancellation() ?: return@awaitEachGesture
-                            val scene = Scene(size.width.toFloat(), size.height.toFloat(), currentFront, currentRear)
-                            val hitRadius = maxOf(32.dp.toPx(), scene.ppm * 2.6f)
-                            val hit = currentCars
-                                .map { it to scene.toScreen(placement(it, scene)) }
-                                .minByOrNull { (_, p) -> hypot(p.x - up.position.x, p.y - up.position.y) }
-                                ?.takeIf { (_, p) -> hypot(p.x - up.position.x, p.y - up.position.y) <= hitRadius }
+                            val camera = Camera3D(size.width.toFloat(), size.height.toFloat(), currentRear)
+                            fun distanceTo(car: NearbyCar): Float {
+                                val (f, l) = placement(car, currentRear)
+                                val c = camera.project(l, CAR_HEIGHT_M / 2, -f) ?: return Float.MAX_VALUE
+                                return hypot(c.first - up.position.x, c.second - up.position.y)
+                            }
+                            val hit = currentCars.minByOrNull { distanceTo(it) }?.takeIf { distanceTo(it) <= 72.dp.toPx() }
                             if (hit != null) {
-                                currentOnSelectCar(hit.first.plate)
+                                currentOnSelectCar(hit.plate)
                             } else {
                                 // 빈 도로: 그 방향 칸의 차를 선택
-                                val (forward, lateral) = scene.toMeters(up.position)
+                                val (forward, lateral) = camera.ground(up.position.x, up.position.y) ?: return@awaitEachGesture
                                 currentOnSelectDirection(Geo.positionOf(forward, lateral))
                             }
                         }
                     }
             ) {
-                val scene = Scene(size.width, size.height, frontM, rearM)
-                drawRoad(scene)
-                // 내 차
-                val me = scene.toScreen(0f to 0f)
-                drawCar(me, 0f, scene.ppm, RoadColors.Accent, null)
-                drawCenteredText(
-                    textMeasurer, "내 차",
-                    Offset(me.x, me.y + CAR_LENGTH_M * scene.ppm / 2 + 4.dp.toPx()),
-                    TextStyle(color = RoadColors.Accent, fontSize = 13.sp, fontWeight = FontWeight.Bold),
-                )
+                val camera = Camera3D(size.width, size.height, rearM)
+                // 이름표는 차 꽁무니 바로 뒤 바닥 자리에 (화면에서는 차 아래)
+                camera.project(0f, 0f, CAR_LENGTH_M / 2 + TAG_GAP_M)?.let {
+                    drawTag(textMeasurer, "내 차", Offset(it.first, it.second), RoadColors.Accent, Color.White, bold = true)
+                }
                 cars.forEach { car ->
-                    val (f, l) = placement(car, scene)
+                    val (f, l) = placement(car, rearM)
                     val clipped = car.forwardMeters != null && car.distanceMeters >= 0 &&
                         (abs(car.forwardMeters - f) > 0.5f || abs((car.lateralMeters ?: 0f) - l) > 0.5f)
-                    val center = scene.toScreen(f to l)
+                    val at = camera.project(l, 0f, -f + CAR_LENGTH_M / 2 + TAG_GAP_M) ?: return@forEach
                     val isSelected = car.plate == selectedPlate
-                    drawCar(
-                        center = center,
-                        headingDeg = car.relativeHeadingDeg ?: 0f,
-                        ppm = scene.ppm,
-                        body = if (clipped) RoadColors.SurfaceHigh.copy(alpha = 0.6f) else RoadColors.SurfaceHigh,
-                        outline = if (isSelected) RoadColors.Accent else null,
-                    )
-                    // 선택 테두리가 있으면 그만큼 글자를 더 바깥으로
-                    val half = CAR_LENGTH_M * scene.ppm / 2 + (if (isSelected) 12.dp.toPx() else 0f)
                     val distance = if (car.distanceMeters < 0) "거리 미확인" else "${car.distanceMeters}m"
-                    drawCenteredText(
+                    drawTag(
                         textMeasurer,
                         if (clipped) "${car.position.label} · $distance ${arrowFor(car)}" else "${car.position.label} · $distance",
-                        Offset(center.x, center.y + half + 4.dp.toPx()),
-                        TextStyle(
-                            color = if (isSelected) RoadColors.Accent else RoadColors.TextPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                        ),
+                        Offset(at.first, at.second),
+                        if (isSelected) RoadColors.Accent else TAG_BACKGROUND,
+                        Color.White,
+                        bold = isSelected,
                     )
                 }
-                // 말풍선은 크게 그리므로 다른 차에 가려지지 않게 차를 다 그린 뒤에 얹는다
+                // 말풍선은 크게 그리므로 이름표에 가려지지 않게 마지막에, 차 지붕 위에 얹는다
                 cars.forEach { car ->
                     val key = Geo.plateKey(car.plate)
                     val isIncoming = incoming != null && Geo.plateKey(incoming.fromPlate) == key
                     val isSent = sent != null && Geo.plateKey(sent.toPlate) == key
                     if (!isIncoming && !isSent) return@forEach
-                    val center = scene.toScreen(placement(car, scene))
-                    val half = CAR_LENGTH_M * scene.ppm / 2 + (if (car.plate == selectedPlate) 12.dp.toPx() else 0f)
-                    val bubbleAt = Offset(center.x, center.y - half - 18.dp.toPx())
+                    val (f, l) = placement(car, rearM)
+                    val top = camera.project(l, CAR_HEIGHT_M + 0.6f, -f) ?: return@forEach
+                    val bubbleAt = Offset(top.first, top.second - 14.dp.toPx())
                     if (isIncoming) drawBubble(textMeasurer, incoming!!.text, bubbleAt, RoadColors.Warn, Color.Black)
                     else drawBubble(textMeasurer, "보냄 · ${sent!!.text}", bubbleAt, RoadColors.Accent, Color.White)
                 }
                 if (cars.isEmpty()) {
-                    drawCenteredText(
+                    drawTag(
                         textMeasurer, "근처에 Car-ind CHAT 차가 없어요",
-                        Offset(size.width / 2, size.height * 0.2f),
-                        TextStyle(color = RoadColors.TextSecondary, fontSize = 15.sp),
+                        Offset(size.width / 2, size.height * 0.16f), TAG_BACKGROUND, Color.White, bold = false,
                     )
                 }
             }
@@ -375,27 +402,12 @@ private class RangeSteps {
     }
 }
 
-/** 화면 크기 ↔ 미터 변환 */
-/** frontM / rearM = 지금 보이는 범위 (m). 기본은 앞 12m · 뒤 7m, 멀리 있는 차가 있으면 그쪽만 넓어진다 */
-private class Scene(val width: Float, val height: Float, val frontM: Float = FRONT_M, val rearM: Float = REAR_M) {
-    /** 1m 가 몇 px 인지. 세로 범위(앞 12m + 뒤 7m)에 맞추고, 가로는 패널 폭만큼 전부 도로로 채운다 (여백 없음) */
-    val ppm = height / (frontM + rearM)
-    /** 내 차 중심에서 화면 좌우 끝까지의 거리 (m) */
-    val halfWidthM = width / 2 / ppm
-    private val cx = width / 2
-    private val cy = height * frontM / (frontM + rearM)
-
-    fun toScreen(fl: Pair<Float, Float>) = Offset(cx + fl.second * ppm, cy - fl.first * ppm)
-    fun toMeters(p: Offset) = (cy - p.y) / ppm to (p.x - cx) / ppm
-}
-
-/** 차를 그릴 (앞뒤, 좌우) m. 벡터를 모르면 칸의 대표 위치, 화면 밖이면 가장자리로 당겨서 */
-private fun placement(car: NearbyCar, scene: Scene): Pair<Float, Float> {
+/** 차를 그릴 (앞뒤, 좌우) m. 벡터를 모르면 칸의 대표 위치, 너무 멀면 보이는 범위 끝으로 당겨서 */
+private fun placement(car: NearbyCar, rearM: Float): Pair<Float, Float> {
     val f = car.forwardMeters
     val l = car.lateralMeters
     val (forward, lateral) = if (f != null && l != null && car.distanceMeters >= 0) f to l else nominal(car.position)
-    val maxLateral = (scene.halfWidthM - CAR_WIDTH_M / 2 - 0.3f).coerceAtLeast(0f)
-    return forward.coerceIn(-(scene.rearM - CAR_LENGTH_M * 0.8f), scene.frontM - CAR_LENGTH_M * 0.8f) to lateral.coerceIn(-maxLateral, maxLateral)
+    return forward.coerceIn(-(rearM - CAR_LENGTH_M * 0.5f), MAX_SHOWN_FRONT_M) to lateral.coerceIn(-MAX_SHOWN_SIDE_M, MAX_SHOWN_SIDE_M)
 }
 
 private fun nominal(position: RelativePosition): Pair<Float, Float> = when (position) {
@@ -418,57 +430,20 @@ private fun arrowFor(car: NearbyCar): String {
     }
 }
 
-private fun DrawScope.drawRoad(scene: Scene) {
-    // 패널 전체가 도로 (아스팔트). 차선은 내 차선을 기준으로 3.5m 마다 화면 끝까지 점선으로
-    drawRect(RoadColors.Surface)
-    val dash = PathEffect.dashPathEffect(floatArrayOf(3f * scene.ppm, 4f * scene.ppm))
-    var lateral = LANE_M / 2
-    while (lateral < scene.halfWidthM) {
-        for (side in listOf(-1f, 1f)) {
-            val x = scene.toScreen(0f to side * lateral).x
-            drawLine(
-                color = RoadColors.TextSecondary.copy(alpha = 0.35f),
-                start = Offset(x, 0f), end = Offset(x, size.height),
-                strokeWidth = 2.dp.toPx(),
-                pathEffect = dash,
-                cap = StrokeCap.Butt,
-            )
-        }
-        lateral += LANE_M
-    }
-}
-
-private fun DrawScope.drawCar(center: Offset, headingDeg: Float, ppm: Float, body: Color, outline: Color?) {
-    val l = CAR_LENGTH_M * ppm
-    val w = CAR_WIDTH_M * ppm
-    rotate(headingDeg, pivot = center) {
-        val tl = Offset(center.x - w / 2, center.y - l / 2)
-        if (outline != null) {
-            val pad = 5.dp.toPx()
-            drawRoundRect(
-                outline.copy(alpha = 0.25f), Offset(tl.x - pad * 2, tl.y - pad * 2), Size(w + pad * 4, l + pad * 4),
-                CornerRadius(w * 0.45f),
-            )
-            drawRoundRect(
-                outline, Offset(tl.x - pad, tl.y - pad), Size(w + pad * 2, l + pad * 2),
-                CornerRadius(w * 0.4f), style = Stroke(2.dp.toPx()),
-            )
-        }
-        drawRoundRect(body, tl, Size(w, l), CornerRadius(w * 0.3f))
-        // 지붕 (살짝 밝게) 와 앞·뒤 유리 (어둡게)
-        drawRoundRect(Color.White.copy(alpha = 0.08f), Offset(tl.x + w * 0.1f, tl.y + l * 0.36f), Size(w * 0.8f, l * 0.3f), CornerRadius(w * 0.1f))
-        val glass = Color.Black.copy(alpha = 0.4f)
-        drawRoundRect(glass, Offset(tl.x + w * 0.12f, tl.y + l * 0.2f), Size(w * 0.76f, l * 0.15f), CornerRadius(w * 0.1f))
-        drawRoundRect(glass, Offset(tl.x + w * 0.12f, tl.y + l * 0.68f), Size(w * 0.76f, l * 0.11f), CornerRadius(w * 0.1f))
-        // 헤드라이트(앞) · 테일라이트(뒤)
-        val r = w * 0.1f
-        val head = Color(0xFFFFF1B8)
-        val tail = Color(0xFFFF5252)
-        drawCircle(head, r, Offset(tl.x + w * 0.22f, tl.y + l * 0.05f))
-        drawCircle(head, r, Offset(tl.x + w * 0.78f, tl.y + l * 0.05f))
-        drawCircle(tail, r, Offset(tl.x + w * 0.22f, tl.y + l * 0.95f))
-        drawCircle(tail, r, Offset(tl.x + w * 0.78f, tl.y + l * 0.95f))
-    }
+/** 차 아래에 붙는 작은 이름표 (둥근 바탕 + 글자). 도로 색과 상관없이 읽히게 바탕을 깐다 */
+private fun DrawScope.drawTag(textMeasurer: TextMeasurer, text: String, topCenter: Offset, background: Color, textColor: Color, bold: Boolean) {
+    val layout = textMeasurer.measure(
+        AnnotatedString(text),
+        TextStyle(color = textColor, fontSize = 14.sp, fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium),
+    )
+    val padX = 10.dp.toPx()
+    val padY = 4.dp.toPx()
+    val w = layout.size.width + padX * 2
+    val h = layout.size.height + padY * 2
+    val left = (topCenter.x - w / 2).coerceIn(2.dp.toPx(), (size.width - w - 2.dp.toPx()).coerceAtLeast(2.dp.toPx()))
+    val top = topCenter.y.coerceIn(0f, (size.height - h).coerceAtLeast(0f))
+    drawRoundRect(background, Offset(left, top), Size(w, h), CornerRadius(h / 2))
+    drawText(layout, topLeft = Offset(left + padX, top + padY))
 }
 
 /** 주행 중에 한눈에 읽히도록 크게 그린다 (글자 60sp). 화면 폭을 넘는 문구는 줄을 바꾼다 */

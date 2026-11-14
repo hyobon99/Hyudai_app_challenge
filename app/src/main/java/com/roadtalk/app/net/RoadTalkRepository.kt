@@ -22,6 +22,11 @@ interface RoadTalkRepository {
     /** 내 위치/차량번호를 서버에 알린다. 위치가 들어올 때마다 호출되고, 위치를 모르면 position 은 null. */
     fun updateMyPresence(myPlate: String, position: MyPosition?)
 
+    /** 내 차 색 (0~5). 다른 차 화면에 이 색으로 보인다. 지원하지 않는 서버는 무시한다 */
+    var mySkin: Int
+        get() = 0
+        set(_) {}
+
     suspend fun send(message: RoadMessage)
 
     /**

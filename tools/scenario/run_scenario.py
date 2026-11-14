@@ -51,6 +51,7 @@ CAR_L, CAR_W = 4.6, 1.9
 RADIAL_MESSAGES = ["감사합니다 🙏", "양보 감사해요", "먼저 가세요", "조심히 가세요",
                    "죄송합니다 🙇", "괜찮아요 👍", "안녕하세요 👋"]
 
+EMULATOR_SKINS = {"A": 1, "B": 0}   # 차 색 (0 파랑, 1 빨강, 2 노랑, 3 초록, 4 보라, 5 은색)
 PRE_ROLL = 8.0    # 시작 전에 미리 달리는 시간 (앱이 이동 방향·속도를 알게 됨)
 LEAD_IN = 2.0     # 영상 앞에 넣는 시작 전 구간
 FPS = 30
@@ -372,6 +373,8 @@ def run_live(sc, server, out_dir, record=True, events=None, stop=None, with_acti
     for c in emus:
         adb(c.device, "shell", "am", "start", "--user", "10", "-n", "com.roadtalk.app/.MainActivity")
         adb(c.device, "logcat", "-c")
+        # 두 차가 화면에서 구별되게 색을 정해 둔다 (A 빨강, B 파랑). 앱에서 '차 색'으로 고르는 것과 같은 값
+        adb(c.device, "shell", "am", "broadcast", "--user", "10", "-a", "com.roadtalk.app.STT_TEST", "--ei", "skin", str(EMULATOR_SKINS.get(c.key, 5)))
     if events is None:
         events = []        # (t, 보낸 차, 받은 차, 문구, 방식)
     lock = threading.Lock()

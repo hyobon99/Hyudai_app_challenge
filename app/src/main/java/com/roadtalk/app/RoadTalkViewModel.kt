@@ -14,6 +14,7 @@ import com.roadtalk.app.navi.NaviGateway
 import com.roadtalk.app.net.FirestoreRoadTalkRepository
 import com.roadtalk.app.net.HttpRoadTalkRepository
 import com.roadtalk.app.net.ServerStore
+import com.roadtalk.app.ui.scene3d.CarLook
 import com.roadtalk.app.vehicle.PlateStore
 import com.roadtalk.app.net.MyPosition
 import com.roadtalk.app.net.NearbyCar
@@ -84,6 +85,10 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     private val _myPlate = MutableStateFlow(plateStore.load() ?: FALLBACK_PLATE)
     val myPlate: StateFlow<String> = _myPlate.asStateFlow()
 
+    /** 내 차 색 (0~5). 고르지 않았으면 차량번호로 정해진 색 */
+    private val _mySkin = MutableStateFlow(plateStore.loadSkin() ?: CarLook.defaultSkinOf(_myPlate.value))
+    val mySkin: StateFlow<Int> = _mySkin.asStateFlow()
+
     init {
         viewModelScope.launch {
             vehicle.state.collect { s ->
@@ -105,6 +110,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             _repository.flatMapLatest { it.incoming }.collect(::onIncoming)
+        }
+        viewModelScope.launch {
+            combine(_repository, _mySkin) { repo, skin -> repo to skin }.collect { (repo, skin) -> repo.mySkin = skin }
         }
         viewModelScope.launch {
             combine(_repository, _myPlate, location.location) { repo, plate, fix -> Triple(repo, plate, fix) }
@@ -130,11 +138,21 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         else showNotice("위치 권한이 없어 근처 차량 검색이 제한돼요.")
     }
 
+    /** 내 차 색 고르기 (0~5). 다른 차 화면에도 이 색으로 보인다 */
+    fun setMySkin(skin: Int) {
+        val value = skin.coerceIn(0, CarLook.SKIN_COUNT - 1)
+        plateStore.saveSkin(value)
+        if (_mySkin.value == value) return
+        _mySkin.value = value
+        showNotice("내 차 색을 ${CarLook.SKIN_NAMES[value]}(으)로 바꿨어요.")
+    }
+
     /** 내 차량번호 등록. 형식이 맞지 않으면 false */
     fun setMyPlate(input: String): Boolean {
         val plate = PlateStore.normalize(input) ?: return false
         plateStore.save(plate)
         _myPlate.value = plate
+        if (plateStore.loadSkin() == null) _mySkin.value = CarLook.defaultSkinOf(plate)
         showNotice("내 차량번호를 $plate 로 등록했어요.")
         return true
     }

@@ -39,6 +39,8 @@ data class NearbyCar(
     val lateralMeters: Float? = null,
     /** 상대 차가 내 진행 방향 기준 몇 도를 보는지 (0 = 같은 방향, ±180 = 맞은편). 모르면 null */
     val relativeHeadingDeg: Float? = null,
+    /** 그 차 운전자가 고른 차 색 (0~5, ui/scene3d/CarLook). 고르지 않았거나 서버가 알려 주지 않으면 null */
+    val skin: Int? = null,
 )
 
 /**

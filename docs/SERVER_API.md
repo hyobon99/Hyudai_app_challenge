@@ -13,16 +13,17 @@
 `200 {"ok": true}`
 
 ## PUT /v1/presence
-요청 `{"plate":"12가 3456","lat":37.42,"lng":-122.08,"heading":0.0,"speed":16.7,"fixAge":800,"accuracy":5.0}`
+요청 `{"plate":"12가 3456","lat":37.42,"lng":-122.08,"heading":0.0,"speed":16.7,"fixAge":800,"accuracy":5.0,"skin":2}`
 - `lat`/`lng`/`heading`/`speed`/`fixAge`/`accuracy`는 null 가능 (생략해도 됨)
 - `speed`: m/s. 앱이 직전 위치와 비교해 계산
 - `fixAge`: 이 위치가 측정된 뒤 앱이 보낼 때까지 지난 ms. 절대 시각이 아니라서 기기 시계가 서로 달라도 됨
 - `accuracy`: 오차 반경 m (FusedLocation confidence)
+- `skin`: 운전자가 고른 차 색 (0 파랑, 1 빨강, 2 노랑, 3 초록, 4 보라, 5 은색). 0~5 의 정수가 아니거나 없으면 null 로 저장 → 받는 앱이 차량번호로 색을 정한다
 - `fixedAt`: 위치 측정 시각을 **서버 시계**로 나타낸 ms. 앱이 응답의 `now` 로 서버와의 시계 차이를 재서(NTP 방식: 보낸 시각과 받은 시각의 가운데 = 서버 now) 환산한다. 있으면 받는 쪽은 `fixAge` 대신 이 값을 쓴다 → 통신 지연이 위치 보정에 섞이지 않음
 → `200 {"ok": true, "now": ms}` — 서버가 `updatedAt = 지금`으로 저장 (같은 번호면 덮어쓰기). 받은 필드는 그대로 보관. `now` 는 서버 현재 시각
 
 ## GET /v1/nearby?plate=&lat=&lng=&radius=300
-→ `200 {"now":ms,"cars":[{"plate","lat","lng","heading","speed","fixAge","fixedAt","accuracy","updatedAt"}]}`
+→ `200 {"now":ms,"cars":[{"plate","lat","lng","heading","speed","fixAge","fixedAt","accuracy","skin","updatedAt"}]}`
 - `now`: 서버 현재 시각 (`updatedAt`과 같은 시계). 앱은 상대 위치의 나이를 `(서버 시계로 본 지금) - fixedAt` (없으면 `(now - updatedAt) + fixAge`)로 계산한다. 이 나이로 '그 위치가 측정된 시각'을 알아내 칼만 필터(`net/CarTracker.kt`)에 넣고, 화면에는 0.1초마다 '지금' 위치를 추정해 그린다
 - 요청자 자신 제외, `updatedAt`이 30초 이내인 차만
 - 요청과 상대 모두 좌표가 있으면 haversine 거리 `radius`(기본 300m) 이내만. 한쪽이라도 좌표가 없으면 거리 필터 없이 포함

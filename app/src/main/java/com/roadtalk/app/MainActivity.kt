@@ -77,6 +77,9 @@ class MainActivity : ComponentActivity() {
             android.util.Log.d("RoadTalkVoice", "say intent: $text")
             viewModel.simulateVoice(text)
         }
+        // 차 색 바꾸기 (시연 자동화가 두 차를 다른 색으로 맞출 때 쓴다)
+        //   adb shell am broadcast --user 10 -a com.roadtalk.app.STT_TEST --ei skin 0
+        if (intent.hasExtra("skin")) viewModel.setMySkin(intent.getIntExtra("skin", 0))
     }
 
     private companion object {
