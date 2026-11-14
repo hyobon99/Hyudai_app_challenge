@@ -50,9 +50,9 @@
 
 요청:
 ```json
-{"text": "뒷차한테 땡큐 보내줘", "messages": ["감사합니다", "좋은 하루 보내세요", "…운전자의 기본 메시지 함 6개"], "cars": ["REAR", "FRONT"], "selected": "FRONT"}
+{"text": "뒷차한테 땡큐 보내줘", "messages": ["감사합니다", "조심히 가세요", "…앱의 메시지 목록 23개"], "cars": ["REAR", "FRONT"], "selected": "FRONT"}
 ```
-- `messages`: 보낼 수 있는 말 전체 (앱이 정한 목록, 최대 20개). 이 중 하나만 고를 수 있다
+- `messages`: 보낼 수 있는 말 전체 (앱의 메시지 목록 23개, 최대 40개). 이 중 하나만 고를 수 있다
 - `cars`: 지금 근처에 있는 차의 방향들, `selected`: 화면에서 선택된 차의 방향 (없으면 null). 방향 값은 `FRONT` `REAR` `LEFT` `RIGHT` `FRONT_LEFT` `FRONT_RIGHT` `REAR_LEFT` `REAR_RIGHT`
 
 응답 200:

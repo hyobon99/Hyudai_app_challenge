@@ -173,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
         text = body.get("text")
         choices = body.get("messages")
         if (not isinstance(text, str) or not text.strip() or not isinstance(choices, list) or not choices
-                or len(choices) > 20 or not all(isinstance(m, str) and m.strip() for m in choices)):
+                or len(choices) > 40 or not all(isinstance(m, str) and m.strip() for m in choices)):
             return self.send_json(400, {"error": "invalid"})
         state = voice_ai.status()
         if state != "ready":

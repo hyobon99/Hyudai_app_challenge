@@ -325,9 +325,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /**
-     * 음성 인식 결과 처리. 보낼 수 있는 말은 기본 메시지 함의 6개([MessageCatalog])뿐이다.
-     *  1) 비속어·위험한 말이면 무시하고 '띵' 소리만 낸다 (앱의 금칙어 사전, 그리고 서버의 AI 판단)
-     *  2) 서버의 AI(TypeSafe AI 의 Jev)가 6개 중 일치도가 가장 높은 말과 받을 차를 고른다. AI 를 쓸 수 없으면 단어 매칭으로 대신한다
+     * 음성 인식 결과 처리. 보낼 수 있는 말은 메시지 목록의 23개([MessageCatalog.ALL])다.
+     *  1) 비속어·위험한 말이면 보내지 않는다 (앱의 금칙어 사전, 그리고 서버의 AI 판단)
+     *  2) 서버의 AI(TypeSafe AI 의 Jev)가 그중 일치도가 가장 높은 말과 받을 차를 고른다. AI 를 쓸 수 없으면 단어 매칭으로 대신한다
      *  3) 일치도가 높은 말이 있으면 그 차에게 보낸다 (받는 차에서는 TTS 로 읽어 준다)
      */
     private fun onVoiceResult(spoken: String) {
@@ -336,7 +336,8 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
             val selectedPlate = _selectedPlate.value
             val selected = cars.firstOrNull { it.plate == selectedPlate }
             val hasProfanity = filter.check(spoken).hasProfanity
-            val presets = _messageSlots.value
+            // 음성으로는 메시지 목록 전체(23개) 중에서 고른다. 기본 메시지 함의 6개는 차를 끌어서 보낼 때 쓰는 것
+            val presets = MessageCatalog.ALL
             // 금칙어가 있으면 서버에 묻지도 않는다
             val ai = if (hasProfanity) null else _repository.value.interpret(spoken, presets, cars, selected?.position)
             when (val result = VoiceIntentResolver.resolve(spoken, cars, selectedPlate, ai, hasProfanity, presets)) {
@@ -348,12 +349,10 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 VoiceIntentResolver.Result.Blocked -> {
-                    // 무시: 아무것도 보내지 않고 소리로만 알린다
-                    chime.ding()
+                    // 무시: 아무것도 보내지 않는다 ('띵' 소리는 메시지를 받았을 때만 낸다)
                     showNotice("보낼 수 없는 말이라 전송하지 않았어요.")
                 }
                 VoiceIntentResolver.Result.NoMessage -> {
-                    chime.ding()
                     showNotice("보낼 수 있는 말 중에 맞는 게 없어요: \"$spoken\"")
                 }
                 is VoiceIntentResolver.Result.NoCarAt -> {
@@ -413,8 +412,12 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         )
         _messages.value = _messages.value + message
         _banner.value = message
-        // 운전 중에 화면을 보지 않아도 되게 소리로 읽어 준다 (Pleos TextToSpeech)
-        voice.speak(SpeechText.incoming(message.peerPosition?.label, message.text))
+        // 운전 중에 화면을 보지 않아도 되게 소리로 알린다: '띵' 하고 울린 뒤 읽어 준다 (Pleos TextToSpeech)
+        chime.ding()
+        viewModelScope.launch {
+            delay(DING_BEFORE_SPEECH_MILLIS)
+            voice.speak(SpeechText.incoming(message.peerPosition?.label, message.text))
+        }
         viewModelScope.launch {
             delay(6_000)
             if (_banner.value?.id == message.id) _banner.value = null
@@ -444,6 +447,8 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         /** 주변 차 검색 반경 (m): 지도가 좁게 보여도 이만큼은 찾고, 아무리 넓게 봐도 이보다 멀리는 찾지 않는다 */
+        /** 받은 메시지를 읽어 주기 전에 '띵' 소리가 먼저 들리도록 두는 틈 */
+        const val DING_BEFORE_SPEECH_MILLIS = 450L
         const val MIN_SEARCH_RADIUS_M = 300
         const val MAX_SEARCH_RADIUS_M = 3000
         const val FALLBACK_PLATE = "99허 0000"

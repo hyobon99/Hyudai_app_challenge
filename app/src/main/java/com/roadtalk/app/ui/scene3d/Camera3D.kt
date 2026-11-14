@@ -123,10 +123,9 @@ class Camera3D(val width: Float, val height: Float, rearM: Float) {
 
     companion object {
         const val FOV_Y = 60f
-        // 내 차 뒤 위에서 45도로 내려다본다 (처음에는 32도였다: 앞은 지평선까지 보이는데 뒤는 8.5m 라 앞뒤 차이가 너무 컸다).
-        // 화면 맨 아래가 내 차 뒤 8.5m, 맨 위가 앞 약 46m 가 되도록 맞춘 값
-        private const val EYE_HEIGHT = 15.71f
-        private const val EYE_BACK = 12.71f
-        private const val LOOK_AHEAD = 3f
+        // 내 차 뒤 위에서 약 32도로 내려다본다. 화면 맨 아래가 내 차 뒤 8.5m 이고, 앞은 지평선(안개 끝)까지 보인다
+        private const val EYE_HEIGHT = 11f
+        private const val EYE_BACK = 14.35f
+        private const val LOOK_AHEAD = 3.25f
     }
 }

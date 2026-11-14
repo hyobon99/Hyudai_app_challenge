@@ -62,7 +62,7 @@ import kotlin.math.sin
  * '메시지 함' 화면. 도로 화면의 말풍선 버튼을 누르면 오른쪽 지도 자리에 뜬다.
  *  - 왼쪽: 보낼 수 있는 말의 전체 목록 ([MessageCatalog.ALL]). 지금 기본 메시지 함에 든 말은 네온으로 빛나고,
  *    들지 않은 말은 채도를 뺀 회색빛이다
- *  - 오른쪽: 기본 메시지 함 6칸. 음성으로 말하면 이 6개 중 뜻이 가장 가까운 것이 전송된다
+ *  - 오른쪽: 기본 메시지 함 6칸. 차를 누른 채 끌면 이 6개가 방향 메뉴로 뜬다 (음성으로는 왼쪽 목록 전체를 보낼 수 있다)
  * 바꾸는 법: 목록의 말을 바꾸고 싶은 칸 위로 끌어다 놓는다 (옆이나 비스듬히 끌면 바로 따라오고, 잠깐 누르고 있어도 집힌다.
  * 거의 위아래로 끌면 목록이 넘어간다). 이미 다른 칸에 있는 말을 놓으면 두 칸이 맞바뀐다.
  */
@@ -166,7 +166,7 @@ fun MessagesPanel(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("차를 누른 채 끌거나 말하면 이 6개 중에서 전송돼요", fontSize = 13.sp, color = MessageColors.Dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("차를 누른 채 끌면 이 6개가 떠요 · 말로는 목록 전체를 보낼 수 있어요", fontSize = 13.sp, color = MessageColors.Dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     val slotWidth = maxWidth * 0.40f
                     val slotHeight = 74.dp

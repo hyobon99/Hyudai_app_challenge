@@ -1,10 +1,5 @@
 package com.roadtalk.app.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -43,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.roadtalk.app.RoadTalkViewModel
-import com.roadtalk.app.net.RoadMessage
 import com.roadtalk.app.vehicle.VehicleGateway
 import com.roadtalk.app.voice.VoiceGateway
 import ai.pleos.playground.vehicle.constant.control.VehicleGear
@@ -144,18 +138,6 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     )
                 }
             }
-        }
-
-        AnimatedVisibility(
-            visible = banner != null,
-            enter = slideInVertically { -it } + fadeIn(),
-            exit = slideOutVertically { -it } + fadeOut(),
-            // 지도 위쪽에 띄워서 도로 화면(보낸 차 위 말풍선)과 마이크 버튼을 가리지 않게
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(top = 120.dp, end = 32.dp),
-        ) {
-            banner?.let { IncomingBanner(it) }
         }
 
         notice?.let {
@@ -292,22 +274,6 @@ private fun TopBar(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 6.dp),
         )
-    }
-}
-
-@Composable
-private fun IncomingBanner(message: RoadMessage) {
-    Column(
-        Modifier
-            .padding(top = 8.dp)
-            .widthIn(min = 420.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(RoadColors.Accent)
-            .padding(horizontal = 28.dp, vertical = 16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("${message.peerPosition?.label ?: "근처 차"}가 보낸 메시지", fontSize = 15.sp, color = Color.White.copy(alpha = 0.85f))
-        Text(message.text, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
     }
 }
 
