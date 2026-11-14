@@ -54,6 +54,7 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     val banner by vm.banner.collectAsStateWithLifecycle()
     val sent by vm.sent.collectAsStateWithLifecycle()
     val notice by vm.notice.collectAsStateWithLifecycle()
+    val sendFailure by vm.sendFailure.collectAsStateWithLifecycle()
     val myPlate by vm.myPlate.collectAsStateWithLifecycle()
     val mySkin by vm.mySkin.collectAsStateWithLifecycle()
     val myCarType by vm.myCarType.collectAsStateWithLifecycle()
@@ -88,6 +89,7 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     selectedPlate = selected,
                     incoming = banner,
                     sent = sent,
+                    sendFailed = sendFailure != null,
                     voice = voice,
                     myType = myCarType,
                     mySkin = mySkin,

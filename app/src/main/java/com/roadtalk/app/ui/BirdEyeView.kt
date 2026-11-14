@@ -128,6 +128,7 @@ fun BirdEyePanel(
     selectedPlate: String?,
     incoming: RoadMessage?,
     sent: RoadMessage?,
+    sendFailed: Boolean,
     voice: VoiceGateway.State,
     myType: Int,
     mySkin: Int,
@@ -310,6 +311,20 @@ fun BirdEyePanel(
                 // 차를 누른 채 끄는 동안: 방향 메뉴
                 drag?.let { drawRadialMenu(it, messageSlots, textMeasurer) }
             }
+            // 전송 실패: 도로 화면 한가운데에 말하기 버튼과 같은 네온 상자로 알린다 (욕설·보낼 수 없는 말·받을 차 없음)
+            if (sendFailed) {
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
+                        .fillMaxWidth()
+                        .height(TALK_BUTTON_HEIGHT_DP.dp)
+                        .padding(8.dp)
+                        .neonBox(radius = 26.dp, strength = 2.2f),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("전송에 실패했습니다", style = Neon.text(34, strong = true), maxLines = 1)
+                }
+            }
             // 오른쪽 위의 작은 동그란 버튼: 내 차 고르기, 메시지 함 (누르면 오른쪽 지도 자리에 그 화면이 뜬다)
             Column(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
                 NeonIconButton(::carIconPath, onOpenGarage)
@@ -329,6 +344,12 @@ fun BirdEyePanel(
 @Composable
 private fun TalkButton(voice: VoiceGateway.State, onTap: () -> Unit) {
     val listening = voice.listen != VoiceGateway.ListenState.IDLE
+    // 누른 직후 마이크가 준비되기 전에는 '준비 중…', 들을 수 있게 되면 '듣는 중…' (준비 전에 한 말은 인식되지 않는다)
+    val label = when (voice.listen) {
+        VoiceGateway.ListenState.IDLE -> "음성으로 말하기"
+        VoiceGateway.ListenState.PREPARING -> "준비 중…"
+        VoiceGateway.ListenState.LISTENING -> "듣는 중…"
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -339,7 +360,7 @@ private fun TalkButton(voice: VoiceGateway.State, onTap: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(if (listening) "듣는 중…" else "음성으로 말하기", style = Neon.text(34, strong = listening), maxLines = 1)
+        Text(label, style = Neon.text(34, strong = voice.listen == VoiceGateway.ListenState.LISTENING), maxLines = 1)
         if (voice.partial.isNotEmpty()) {
             Text(
                 if (listening) voice.partial else "인식됨: ${voice.partial}",

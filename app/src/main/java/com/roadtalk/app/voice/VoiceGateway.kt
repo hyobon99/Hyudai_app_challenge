@@ -32,6 +32,7 @@ import ai.pleos.playground.tts.listener.OnInitializeListener as TtsInitListener
  */
 class VoiceGateway(context: Context) {
 
+    /** IDLE = 듣지 않음, PREPARING = 버튼을 눌렀고 마이크가 준비되는 중, LISTENING = 듣는 중 (지금 말하면 인식된다) */
     enum class ListenState { IDLE, PREPARING, LISTENING }
 
     data class State(
@@ -53,6 +54,13 @@ class VoiceGateway(context: Context) {
     /** 이번에 듣기 시작한 뒤로 인식된 말 / 그 말을 이미 넘겼는지 */
     @Volatile private var heard = ""
     @Volatile private var delivered = false
+
+    /**
+     * 음성 인식 엔진을 미리 불러 두는 중인지. 앱을 켠 뒤 처음 듣기를 시작할 때는 엔진을 불러오느라 준비에 2~7초가 걸리고,
+     * 그 뒤로는 0.2~0.4초다. 그래서 앱이 켜질 때 소리 없는 음성 데이터를 조금 넣어 엔진을 미리 깨워 둔다 (마이크는 켜지 않는다).
+     * 이 동안 오는 인식 결과·상태 알림은 버린다
+     */
+    @Volatile private var warming = false
 
     /** 말을 멈췄는지 판단 */
     private val endpointer = Endpointer()
@@ -78,15 +86,22 @@ class VoiceGateway(context: Context) {
 
     private val resultListener = object : ResultListener {
         override fun onReady() {
-            // 마이크가 준비됐다: '아무 말도 없으면 끝' 시간은 지금부터 센다 (준비에 몇 초씩 걸릴 때가 있다)
+            if (warming) return
+            // 마이크가 준비됐다: 이제 말하면 인식된다. '아무 말도 없으면 끝' 시간은 지금부터 센다 (준비에 몇 초씩 걸릴 때가 있다)
+            Log.d(TAG, "ready to listen")
             endpointer.begin(SystemClock.elapsedRealtime())
-            update { copy(listen = ListenState.PREPARING) }
+            update { copy(listen = ListenState.LISTENING) }
         }
         override fun onStartedRecognition() {
+            if (warming) return
             endpointer.begin(SystemClock.elapsedRealtime())
             update { copy(listen = ListenState.LISTENING, partial = "") }
         }
         override fun onUpdated(stt: String, completed: Boolean) {
+            if (warming) {
+                if (completed) warming = false
+                return
+            }
             Log.d(TAG, "STT ${if (completed) "final" else "partial"}: $stt")
             endpointer.heard(stt, SystemClock.elapsedRealtime())
             heard = stt
@@ -96,6 +111,11 @@ class VoiceGateway(context: Context) {
         override fun onUpdatedEpdData(on: Long, off: Long) = Unit
         override fun onUpdatedRms(rms: Double) = Unit
         override fun onEndedRecognition() {
+            if (warming) {
+                warming = false
+                Log.d(TAG, "warm-up done")
+                return
+            }
             update { copy(listen = ListenState.IDLE) }
             // SDK 는 '인식 끝'을 알린 직후에 최종 결과(더 정확하게 다듬은 문장)를 주는 경우가 많다 → 잠깐 기다린다.
             // 듣기를 끝냈는데 최종 결과가 끝내 안 오면, 그때까지 들은 말을 결과로 쓴다
@@ -105,6 +125,11 @@ class VoiceGateway(context: Context) {
             }, "stt-final").start()
         }
         override fun onError(errorType: SttError) {
+            if (warming) {
+                warming = false
+                Log.d(TAG, "warm-up ended with $errorType")
+                return
+            }
             Log.w(TAG, "STT error $errorType")
             update { copy(listen = ListenState.IDLE, error = "음성 인식: ${describe(errorType)}") }
         }
@@ -139,6 +164,7 @@ class VoiceGateway(context: Context) {
                     stt.addListener(resultListener)
                     runCatching { stt.setLocale(Locale.KOREA) }
                     update { copy(sttReady = true) }
+                    warmUp()
                 }
 
                 override fun onFailure(errorType: SttError) =
@@ -163,12 +189,30 @@ class VoiceGateway(context: Context) {
         }
     }
 
+    /** 소리 없는 음성 데이터 0.3초 분량을 인식시켜 엔진을 미리 불러 둔다 → [warming] */
+    private fun warmUp() {
+        warming = true
+        Thread({
+            try {
+                Log.d(TAG, "warming up the speech engine")
+                stt.sendAudio(ByteArray(PCM_CHUNK_BYTES * 3))
+                stt.completeAudioSend()
+            } catch (e: Exception) {
+                Log.w(TAG, "warm-up failed", e)
+            }
+            // 끝났다는 알림이 안 오더라도 이 시간이 지나면 평소대로 돌아간다
+            Thread.sleep(WARM_UP_MAX_MILLIS)
+            warming = false
+        }, "stt-warm").start()
+    }
+
     fun startListening() {
         if (!_state.value.sttReady) {
             update { copy(error = "음성인식이 아직 준비되지 않았어요") }
             return
         }
         if (_state.value.listen != ListenState.IDLE) return
+        warming = false
         try {
             beginUtterance()
             // 음성 인식이 준비될 때(onReady)까지는 '아무 말도 없음' 으로 끝내지 않는다. 준비 소식이 끝내 안 오면 그만큼 더 기다렸다가 끝낸다
@@ -219,6 +263,7 @@ class VoiceGateway(context: Context) {
             update { copy(error = "음성인식이 아직 준비되지 않았어요") }
             return
         }
+        warming = false
         beginUtterance()
         update { copy(error = null, partial = "") }
         Log.d(TAG, "sending ${pcm.size} bytes of PCM audio to STT")
@@ -275,6 +320,8 @@ class VoiceGateway(context: Context) {
         const val PCM_CHUNK_BYTES = 3_200
         /** '인식 끝' 뒤에 최종 결과를 기다리는 시간 */
         const val FINAL_WAIT_MILLIS = 500L
+        /** 엔진을 미리 불러 두는 동안 인식 알림을 버리는 최대 시간 */
+        const val WARM_UP_MAX_MILLIS = 8_000L
         /** request() 뒤에 음성 인식이 준비되기를 기다려 주는 시간 */
         const val READY_WAIT_MILLIS = 15_000L
         /** stop() 뒤에 SDK 의 '인식 끝' 을 기다리는 시간 */

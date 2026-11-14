@@ -82,6 +82,13 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
 
+    /**
+     * 방금 전송에 실패했는지 (값이 있으면 도로 화면 가운데에 '전송에 실패했습니다' 상자를 띄운다).
+     * 보낼 수 없는 말(욕설·위험한 말)이거나, 메시지 목록에 맞는 말이 없거나, 받을 차가 없을 때
+     */
+    private val _sendFailure = MutableStateFlow<Long?>(null)
+    val sendFailure: StateFlow<Long?> = _sendFailure.asStateFlow()
+
     /** 방금 내가 보낸 메시지 (받는 차 위에 몇 초간 표시) */
     private val _sent = MutableStateFlow<RoadMessage?>(null)
     val sent: StateFlow<RoadMessage?> = _sent.asStateFlow()
@@ -348,21 +355,11 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
                         voice.speak(SpeechText.sent(result.car.position.label, text))
                     }
                 }
-                VoiceIntentResolver.Result.Blocked -> {
-                    // 무시: 아무것도 보내지 않는다 ('띵' 소리는 메시지를 받았을 때만 낸다)
-                    showNotice("보낼 수 없는 말이라 전송하지 않았어요.")
-                }
-                VoiceIntentResolver.Result.NoMessage -> {
-                    showNotice("보낼 수 있는 말 중에 맞는 게 없어요: \"$spoken\"")
-                }
-                is VoiceIntentResolver.Result.NoCarAt -> {
-                    showNotice("${result.position.cell} 방향에는 Car-ind CHAT 차가 없어요.")
-                    voice.speak("${result.position.cell} 방향에는 차가 없어요")
-                }
-                VoiceIntentResolver.Result.NoCar -> {
-                    showNotice("근처에 메시지를 받을 차량이 없어요.")
-                    voice.speak("근처에 받을 차가 없어요")
-                }
+                // 보낼 수 없는 말(욕설·위험한 말)이거나 목록에 맞는 말이 없다: 아무것도 보내지 않고 화면과 소리로 알린다
+                VoiceIntentResolver.Result.Blocked -> showSendFailure()
+                VoiceIntentResolver.Result.NoMessage -> showSendFailure()
+                is VoiceIntentResolver.Result.NoCarAt -> showSendFailure("${result.position.cell} 방향에는 차가 없어요")
+                VoiceIntentResolver.Result.NoCar -> showSendFailure("근처에 받을 차가 없어요")
             }
         }
     }
@@ -371,13 +368,12 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         val text = rawText.trim()
         if (text.isEmpty()) return false
         if (toPlate == null) {
-            showNotice("근처에 메시지를 받을 차량이 없어요.")
+            showSendFailure("근처에 받을 차가 없어요")
             return false
         }
         val checked = filter.check(text)
         if (checked.blocked) {
-            showNotice("부적절한 표현이 포함되어 전송하지 않았어요.")
-            voice.speak("부적절한 표현이 있어서 보내지 않았어요")
+            showSendFailure()
             return false
         }
         val message = RoadMessage(
@@ -429,6 +425,20 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         return allCars.value.firstOrNull { VoiceCommandParser.normalizePlate(it.plate) == key }?.position
     }
 
+    /**
+     * 전송 실패를 알린다: 도로 화면 가운데에 '전송에 실패했습니다' 상자를 잠깐 띄우고, 소리로도 말해 준다 (Pleos TextToSpeech).
+     * spoken = 읽어 줄 말 (받을 차가 없을 때는 그 이유를 말해 준다)
+     */
+    private fun showSendFailure(spoken: String = SEND_FAILED_TEXT) {
+        val id = System.nanoTime()
+        _sendFailure.value = id
+        voice.speak(spoken)
+        viewModelScope.launch {
+            delay(SEND_FAILED_SHOW_MILLIS)
+            if (_sendFailure.value == id) _sendFailure.value = null
+        }
+    }
+
     private fun showNotice(text: String) {
         _notice.value = text
         viewModelScope.launch {
@@ -449,6 +459,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         /** 주변 차 검색 반경 (m): 지도가 좁게 보여도 이만큼은 찾고, 아무리 넓게 봐도 이보다 멀리는 찾지 않는다 */
         /** 받은 메시지를 읽어 주기 전에 '띵' 소리가 먼저 들리도록 두는 틈 */
         const val DING_BEFORE_SPEECH_MILLIS = 450L
+        /** 전송에 실패했을 때 화면에 띄우고 읽어 주는 말, 화면에 띄워 두는 시간 */
+        const val SEND_FAILED_TEXT = "전송에 실패했습니다"
+        const val SEND_FAILED_SHOW_MILLIS = 3_000L
         const val MIN_SEARCH_RADIUS_M = 300
         const val MAX_SEARCH_RADIUS_M = 3000
         const val FALLBACK_PLATE = "99허 0000"
