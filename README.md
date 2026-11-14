@@ -1,11 +1,11 @@
 # Car-ind CHAT (카인드챗)
 
-비상등 대신 말로: 근처 현대차끼리 짧은 감사·사과 메시지를 주고받는 Pleos Connect 앱 (프로토타입).
+
 차량용 채팅 어플리케이션, 근처 현대 차끼리 '감사합니다', '먼저 가세요' 같은 짧은 의사소통을 할 수 있는 차량 간 소통 앱입니다.
 
 ---
 
-## 처음 설치한 사람용 실행 가이드
+## 섳치 및 실행 가이드
 
 ### 0. 준비물
 - **최신 Android Studio** (이 프로젝트는 AGP 9.4.1 / Gradle 9.6 / compileSdk 37 사용)
@@ -13,7 +13,7 @@
 - PC RAM 16GB 이상 권장 (Pleos 에뮬레이터 1대가 RAM 4GB 사용)
 - **Firebase는 따로 설치하거나 가입할 필요 없음.** 프로젝트에 `app/google-services.json`이 들어 있어서 팀 Firebase(`hyundai-roadtalk`)에 자동 연결됨
 
-### 1. Pleos Connect 에뮬레이터 설치 (한 번만)
+### 1. Pleos Connect 에뮬레이터 설치 
 공식 가이드: https://document.pleos.ai/docs/connect/guide/getting-started/application-development/setup-connect-sdk-emulator
 
 1. Android Studio → **Tools → SDK Manager → SDK Update Sites** → `+`
@@ -21,7 +21,7 @@
    - URL (Windows): `https://nexus-playground.pleos.ai/repository/raw-releases/connect-avd/2.x/crp-sys-img.xml`
    - URL (Mac): `https://nexus-playground.pleos.ai/repository/raw-releases/connect-avd/2.x/crp-arm64-sys-img.xml`
 2. **SDK Platforms** 탭 → Show Package Details → API 34의 **Pleos Connect system image** 설치
-3. 같은 탭에서 **Android API 37** 플랫폼도 설치 (빌드에 필요. 없으면 Sync 때 설치하라고 뜸)
+3. 같은 탭에서 **Android API 37** 플랫폼도 설치 
 4. Android Studio 재시작
 5. **Device Manager → Create device → Automotive → Pleos Connect v2.1.0**
    - Advanced Settings: Default boot **Cold**, RAM **4 GB**
@@ -29,29 +29,29 @@
 
 ### 2. 프로젝트 열기
 1. 프로젝트 폴더(`RoadTalk`)를 받는다 (GitHub clone 또는 압축 파일)
-   - 압축으로 받았다면 `local.properties` 파일은 **삭제** (만든 사람 PC 경로가 들어 있음. Android Studio가 자동으로 다시 만듦)
+   - 압축으로 받았다면 `local.properties` 파일은 **삭제** 
 2. Android Studio → **File → Open** → `RoadTalk` **폴더** 선택 → Trust Project
-3. 오른쪽 아래 Gradle Sync가 끝날 때까지 대기 (첫 Sync는 몇 분 걸림)
+3. 오른쪽 아래 Gradle Sync가 끝날 때까지 대기 
 
 ### 3. 실행
-1. Device Manager에서 Pleos Connect 에뮬레이터 ▶ 실행 (첫 부팅은 몇 분)
+1. Device Manager에서 Pleos Connect 에뮬레이터 ▶ 실행 
 2. 상단 툴바 기기 선택 칸에서 그 에뮬레이터 선택 → **▶ Run**
-3. 앱 첫 실행 때 "알 수 없는 작업 실행 허용?" 창 → **허용** (위치 권한. Pleos 권한이라 한글 이름이 없어서 이렇게 표시됨)
+3. 앱 첫 실행 때 "알 수 없는 작업 실행 허용?" 창 → **허용** 
 4. 상단 **"내 차 99허 0000 ✎"** 를 눌러 **각자 다른 차량번호** 등록 (예: `12가 3456`)
-   - 번호가 같으면 서로를 자기 자신으로 보고 목록에 안 뜸
+   
 5. 상단에 **"서버: Firebase"** 가 보이면 연결 성공
 
-### 4. 두 대로 대화해 보기
-- Device Manager에서 Pleos 에뮬레이터를 하나 더 만들어 두 개를 동시에 켠다 (RAM이 빠듯하면 크롬 탭 정리)
+### 4. 차량 두 대 시뮬레이션
+- Device Manager에서 Pleos 에뮬레이터를 하나 더 만들어 두 개를 동시에 켠다 
 - 기기 선택 칸 → **Select Multiple Devices...** → 둘 다 체크 → Run
 - 각 에뮬레이터에서 번호를 다르게 등록하면 서로 "근처 현대차"에 뜨고 메시지를 주고받을 수 있음
-- 다른 PC의 팀원 에뮬레이터와도 대화 가능 (같은 Firebase를 쓰고, 위치가 300m 안이면)
+- 다른 PC의 팀원 에뮬레이터와도 대화 가능 (같은 Firebase를 쓰고, 상대 거리가 300m 안이면)
 
-### 자주 나는 문제
+### 자주 발생하는 문제
 | 증상 | 해결 |
 |---|---|
-| ▶ Run 버튼이 회색 | **File → Sync Project with Gradle Files** 후 대기. 창이 좁으면 기기 선택 칸이 숨으니 창 넓히기 |
-| `Modifications to AndroidManifest.xml require an app restart` | 빨간 **■ Stop** 누르고 ▶ Run (⚡ Apply Changes 쓰지 말기) |
+| ▶ Run 버튼이 회색 | **File → Sync Project with Gradle Files** 후 대기. |
+| `Modifications to AndroidManifest.xml require an app restart` | 빨간 **■ Stop** 누르고 ▶ Run  |
 | 상단에 "서버: 시뮬레이션" | `app/google-services.json`이 없음 → 파일 받아서 `app/`에 넣고 Sync |
 | "Firebase 오류: PERMISSION_DENIED" | Firestore 규칙 확인 (아래 Firebase 섹션) |
 | 히터·안전벨트 등 차량 기능이 반응 없음 | Virtual Console 사용: `adb forward tcp:8088 tcp:8088` → 브라우저 http://127.0.0.1:8088 |
@@ -74,12 +74,8 @@
   - `presenceTtlMillis = 30초` : 30초 넘게 위치 갱신이 없는 차는 제외
   - `messageTtlMillis = 60초` : 60초 지난 메시지는 무시
 - 8방향(앞/뒤/좌/우/대각선)은 내 진행 방향(heading) 기준 상대 위치 벡터로 나눈다 (`net/Geo.kt`)
-  - 위치는 1~2초마다 드문드문 오지만 화면은 **0.1초마다(약 10Hz)** 갱신한다. 차마다 칼만 필터(`net/CarTracker.kt`)가 위치·속도를 추정하고, 마지막 측정 뒤 지난 시간만큼 이어 그려서 두 차를 같은 '지금'으로 맞춘다. 새 위치가 와서 생기는 보정은 한 번에 튀지 않게 0.3초에 걸쳐 반영
+  - 위치는 1~2초마다 드문드문 오지만 화면은 **0.1초마다(약 10Hz)** 갱신한다. 차마다 칼만 필터(`net/CarTracker.kt`)가 위치·속도를 추정하고, 마지막 측정 뒤 지난 시간만큼 이어 그려서 두 차를 같은 '시점'으로 맞춘다. 새 위치가 와서 생기는 보정은 한 번에 튀지 않게 0.3초에 걸쳐 반영
   - 움직임 확인용 로그: `adb shell setprop log.tag.RoadTalkTrack VERBOSE` 후 `adb logcat -s RoadTalkTrack` (0.1초마다 차별 앞뒤·좌우 m)
-  - 측정(급한 끼어들기 시나리오, 에뮬레이터): 갱신 9.8Hz. 실제 위치와의 차이는 일정하게 달릴 때 평균 0.1~0.2m(최대 0.6m), 급제동·급차로변경 구간은 평균 1.3~1.6m(최대 3.4m)
-  - 급하게 움직이는 순간에 어긋나는 이유: 위치가 1~2초에 한 번만 오고 그 사이는 '직전 속도 그대로'라고 보고 이어 그리기 때문. 그래서 급제동은 0.5~0.8초 늦게 보이고, 그 직후 2m쯤 더 갔다가 돌아온다
-  - 화면 배율은 차가 조금 움직일 때마다 바뀌면 전체가 출렁여 보여서, 앞 12→18→24→30m · 뒤 7→12→17→22m 단계로만 바뀐다
-  - 일반 GPS 오차(수~10m) 때문에 차선 단위 정확도는 아님. 같은 차선/옆 차선 구분이 가장 약하다
 
 ---
 
@@ -114,8 +110,8 @@ Firestore 구조: `presence/{번호}` (위치·geohash, 5초마다 갱신), `inb
 ---
 
 ## 화면 구성
-- 왼쪽: 위에서 본 도로 (`ui/BirdEyeView.kt`). Car-ind CHAT을 켠 차만 GPS 상대 위치에 표시. 파란 테두리가 있는 차는 '지금 선택된 차'(탭하거나 메시지를 보낸 차, 처음에는 가장 가까운 차)로, 🎤 음성 메시지를 받는 차다. **차를 누른 채 끌면 메시지 7개가 정칠각형으로 뜨고, 원하는 쪽으로 끌었다 놓으면** 그 방향의 메시지가 그 차에게 전송된다 (`RADIAL_MESSAGES`에서 문구 변경)
-- 메시지는 차 위에 큰 말풍선(글자 60sp)으로 뜨고, 받은 메시지는 **TextToSpeech SDK**로 읽어 준다 (예: "앞차가 보낸 메시지. 양보 감사해요", 그림 문자는 빼고 읽음 · `chat/SpeechText.kt`)
+- 왼쪽: 위에서 본 도로 (`ui/BirdEyeView.kt`). Car-ind CHAT을 켠 차만 GPS 상대 위치에 표시. 파란 테두리가 있는 차는 '지금 선택된 차'(탭하거나 메시지를 보낸 차, 처음에는 가장 가까운 차)로, 음성 메시지를 받는 차다. **차를 누른 채 끌면 메시지 7개가 정칠각형으로 뜨고, 원하는 쪽으로 끌면** 그 방향의 메시지가 그 차에게 전송된다 
+- 메시지는 차 위에 큰 말풍선(글자 60sp)으로 뜨고, 받은 메시지는 **TextToSpeech SDK**로 읽어 준다.
 - 가운데: 내비게이션 (`ui/NavPanel.kt`). 지도는 OpenStreetMap 타일(osmdroid), 내 위치 중심·진행 방향이 위. 지도 데이터 © OpenStreetMap contributors
   - 그 위에 **NaviHelper SDK**(`navi/NaviGateway.kt`)로 받은 순정 내비 정보를 표시: 다음 회전, 목적지, 남은 거리·시간, 제한속도
   - 지도를 길게 누르면 그 위치로 순정 내비에 경로 안내를 요청, 안내 카드의 "안내 종료"로 취소
