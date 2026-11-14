@@ -12,9 +12,13 @@ package com.roadtalk.app.chat
 class ProfanityFilter(
     bannedWords: Collection<String> = DEFAULT_BANNED,
     private val blockRatio: Double = 0.5,
+    allowedPhrases: Collection<String> = DEFAULT_ALLOWED,
 ) {
     private val banned = bannedWords.map(::normalizeWord).filter { it.isNotEmpty() }.distinct()
         .sortedByDescending { it.length }
+
+    /** 금칙어가 들어 있어도 욕설이 아닌 표현 (이 표현 안의 금칙어는 건드리지 않는다) */
+    private val allowed = allowedPhrases.map(::normalizeWord).filter { it.isNotEmpty() }.distinct()
 
     data class Result(
         val original: String,
@@ -35,6 +39,17 @@ class ProfanityFilter(
             }
         }
         val normalized = kept.toString()
+        // 허용 표현이 차지하는 자리 (예: '라이트 꺼져 있다' 의 '꺼져' 는 욕이 아니다)
+        val allowedPositions = BooleanArray(normalized.length)
+        for (phrase in allowed) {
+            var from = 0
+            while (true) {
+                val hit = normalized.indexOf(phrase, from)
+                if (hit < 0) break
+                for (k in hit until hit + phrase.length) allowedPositions[k] = true
+                from = hit + 1
+            }
+        }
         val maskedPositions = BooleanArray(text.length)
         var maskedCount = 0
         for (word in banned) {
@@ -42,6 +57,10 @@ class ProfanityFilter(
             while (true) {
                 val hit = normalized.indexOf(word, from)
                 if (hit < 0) break
+                if ((hit until hit + word.length).all { allowedPositions[it] }) {
+                    from = hit + 1
+                    continue
+                }
                 for (k in hit until hit + word.length) {
                     val orig = indexMap[k]
                     if (!maskedPositions[orig]) {
@@ -76,5 +95,11 @@ class ProfanityFilter(
             "좆", "존나", "졸라", "ㅈㄴ", "미친놈", "미친년", "닥쳐", "꺼져",
             "fuck", "shit", "bitch",
         )
+
+        /**
+         * 금칙어가 들어 있지만 욕설이 아닌 표현. '꺼져' 는 욕이지만 '라이트 꺼져 있어요' (전조등이 꺼졌다고 알려 주는 말)는 보낼 수 있어야 한다.
+         * 이 표현만 허용한다: '꺼져' 만 따로 말하거나 다른 말에 붙이면 그대로 걸린다
+         */
+        val DEFAULT_ALLOWED = listOf("라이트 꺼져 있", "라이트가 꺼져 있")
     }
 }
