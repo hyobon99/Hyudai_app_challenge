@@ -119,9 +119,16 @@ Firestore 구조: `presence/{번호}` (위치·geohash, 5초마다 갱신), `inb
   - 3D 그림은 추가 라이브러리 없이 OpenGL ES 2.0 으로 직접 그린다 (`ui/scene3d/Scene3DView.kt`): 3차선 도로, 인도의 나무·가로등, 차와 바닥 그림자. 내 속도만큼 도로가 뒤로 흘러간다
   - 뒤쪽에 차가 있으면 그 차가 화면 아래에 들어오도록 카메라가 물러난다 (`ui/scene3d/Camera3D.kt`). 이름표·말풍선은 같은 카메라로 자리를 계산해 3D 그림 위에 얹는다
   - **내 차 고르기**: 도로에서 내 차(또는 위쪽 "내 차 꾸미기")를 누르면 오른쪽 지도 자리에 쇼룸 화면이 뜬다 (`ui/GaragePanel.kt` + `ui/scene3d/GarageView.kt`). 회전 받침 위의 큰 차 둘레에 차종 카드 8장(미니·세단·해치백·밴·픽업·스포츠카·버스·트럭)이 부채꼴로 놓이고, 아래에서 색 6가지를 고른다. 고르는 즉시 적용되고, 서버를 거쳐 **다른 차 화면에도 그 차종·색으로** 보인다 (HTTP 서버 모드). 고르지 않은 차는 차량번호로 정해진 모양·색 (`ui/scene3d/CarLook.kt`)
-  - **주변 건물**: 지도(OpenStreetMap)에서 내 위치 둘레 건물의 바닥 윤곽과 높이·층수를 받아, 그 자리에 그 높이로 건물 모델을 세운다 (`map/OsmBuildings.kt`, `map/BuildingsSource.kt`). 높이가 지도에 없는 건물(절반 이상)은 바닥 넓이로 짐작한다. 우리 도로는 실제 도로 모양이 아니라 진행 방향으로 곧게 그린 3차선이라, 그 위에 걸치는 건물은 길가로 밀어낸다
-    - 시연 위치 일대(강남역 북쪽 반경 750m, 건물 1,863개)는 앱에 넣어 두었고(`assets/buildings_demo.json`), 그 밖에서는 Overpass API 에서 그때그때 받는다. 공개 서버라 바쁠 때는 못 받기도 하는데, 그때는 건물 없이 도로만 보인다. 다른 곳을 넣어 두려면 `python tools/assets/fetch_buildings.py 위도 경도 반경`
-    - 건물을 Overpass 에서 받을 때는 내 위치 좌표가 그 서버로 간다 (지도 타일을 받을 때와 같다). 건물 자료 © OpenStreetMap contributors
+  - **주변 차로 보는 범위**: 서버에서 받은 차 가운데, 차의 카메라가 방향마다 알아보는 거리 안에 있는 차만 주변 차로 3D 도로에 그리고 메시지 대상으로 삼는다 (`net/Perception.kt`): 정면 250m · 정면 좌우 약 25도 150m · 앞 옆 80m · 뒤 옆 100m · 바로 뒤 50m. 실제 카메라를 쓰는 것은 아니고 거리 기준만 같게 잡았다. 차는 실제 위치에 그리고 이름표에는 방향만 적는다(거리는 적지 않음). 화면 밖의 차는 이름표도 없다
+    - 오른쪽 지도에는 그보다 넓게, 지도에 지금 보이는 범위(최소 300m · 최대 3km) 안의 차가 모두 점으로 나온다. 앱을 켜고 30초 안에 위치를 보낸 차만 보인다
+  - **지도 기반 주변 모습** (`map/`): 내 위치 둘레의 지도(OpenStreetMap) 자료를 받아 3D 도로 둘레에 실제대로 그린다
+    - **건물**: 바닥 윤곽 모양 그대로 벽을 세우고 지붕을 덮는다 (`map/CityMesh.kt`). 높이는 지도의 height·층수, 없으면(절반 이상) 바닥 넓이로 짐작. 벽에는 4m × 한 층 칸마다 창문 무늬
+    - **교차로**: 내가 달리는 길은 곧은 3차선 그대로 두고, 그 길과 만나는 길·주변 길을 지도의 위치·방향·폭대로 바닥에 깐다. 만나는 자리에서는 인도와 차선이 끊기고 나무·가로등을 세우지 않는다 (`ui/scene3d/StripBuilder.kt`)
+    - **횡단보도**: 지도의 횡단보도 위치에 그린다. 내 길을 건너는 것은 내 3차선 폭에 맞추고, 다른 길의 것은 그 길의 방향·폭에 맞춘다
+    - 한계: 내 길은 실제 차로 수나 굽은 모양을 따르지 않는다(항상 곧은 3차선). 그래서 내 길 위에 걸치는 건물은 걸친 만큼 길가로 밀어낸다. 신호등·정지선·차선 수는 그리지 않는다
+    - 시연 위치 일대(강남역 북쪽 반경 750m: 건물 1,863 · 도로 236 · 횡단보도 131)는 앱에 넣어 두었고(`assets/buildings_demo.json`), 그 밖에서는 Overpass API 에서 그때그때 받는다. 공개 서버라 바쁠 때는 못 받기도 하는데, 그때는 지도 없이 내 길만 보인다. 다른 곳을 넣어 두려면 `python tools/assets/fetch_buildings.py 위도 경도 반경`
+    - Overpass 에서 받을 때는 내 위치 좌표가 그 서버로 간다 (지도 타일을 받을 때와 같다). 지도 자료 © OpenStreetMap contributors
+    - 현대 SDK 에는 지도 모양(도로 선·건물·횡단보도)이 없다. 내 위치·방향은 FusedLocation SDK 에서, 모양은 OpenStreetMap 에서 온다
 - 도로 아래: **꾹 누르고 말하기 버튼.** 누르고 있는 동안 듣고, 손을 떼면 그 말이 정해진 인사 중 가장 가까운 것으로 바뀌어 전송된다 (아래 "말로 보내기")
 - 메시지는 차 위에 큰 말풍선(글자 60sp)으로 뜨고, 받은 메시지는 **TextToSpeech SDK**로 읽어 준다 (예: "앞차가 보낸 메시지. 양보 감사해요", 그림 문자는 빼고 읽음 · `chat/SpeechText.kt`)
 - 가운데: 내비게이션 (`ui/NavPanel.kt`). 지도는 OpenStreetMap 타일(osmdroid), 내 위치 중심·진행 방향이 위. 지도 데이터 © OpenStreetMap contributors
@@ -200,20 +207,19 @@ python tools/scenario/run_scenario.py merge --live --loop   # 영상으로 만�
 참고: Pleos 에뮬레이터는 위치를 옮겨도 진행 방향(heading)을 항상 0으로 준다. 그래서 앱은 SDK 값이 0이면 이동 방향으로 계산한다 (`location/LocationGateway.kt`). 실차에서는 SDK 값을 그대로 쓴다.
 
 ## 3D 에셋
-왼쪽 3D 화면의 모델은 아래 두 무료 에셋을 앱이 읽는 형식으로 바꾼 것이고, 바꾼 파일이 `app/src/main/assets/scene3d/` 에 들어 있다 (약 5.3MB). 따로 받을 것 없이 빌드하면 된다.
+왼쪽 3D 화면의 모델은 아래 두 무료 에셋을 앱이 읽는 형식으로 바꾼 것이고, 바꾼 파일이 `app/src/main/assets/scene3d/` 에 들어 있다 (약 1.4MB). 따로 받을 것 없이 빌드하면 된다.
 
 | 쓰는 것 | 출처 (만든 사람) | 조건 |
 |---|---|---|
 | 차 10종 + 색 팔레트 6종 | [Low Poly Cars](https://brokenvector.itch.io/low-poly-cars) — Broken Vector | 무료 배포. 페이지에 라이선스 문구가 따로 없다 |
 | 도로(Road Straight)·나무·가로등 | [Low Poly City & Traffic Pack: FREE Lite](https://ggiedrius.itch.io/lowpoly-city-traffic-lite) — GGiedrius | 개인·상업 프로젝트에 사용 가능. 모델을 에셋으로 되팔거나 재배포하지 말 것 |
-| 건물 19종 | [City Kit (Commercial)](https://kenney.nl/assets/city-kit-commercial) — Kenney | CC0 (조건 없음) |
-| 건물 위치·높이 (`assets/buildings_demo.json`) | OpenStreetMap | ODbL — "© OpenStreetMap contributors" 표기 |
+| 건물 윤곽·높이, 도로, 횡단보도 (`assets/buildings_demo.json`) | OpenStreetMap | ODbL — "© OpenStreetMap contributors" 표기 |
 
 모델의 권리는 각 제작자에게 있다. 이 저장소의 파일은 이 앱에서 쓰려고 변환한 것이니, 다른 곳에 쓰려면 위 페이지에서 원본을 받아 조건을 확인할 것.
 
 다시 만들려면:
-1. 위 페이지들에서 `Models.zip`, `Textures.zip` (차), `LowPoly_City_Traffic_Lite_FREE.zip` (도로), City Kit (Commercial) zip (건물) 을 받는다
-2. 한 폴더 안에 `cars/` (Models.zip·Textures.zip 을 푼 것 → `cars/Models/*.fbx`, `cars/Textures/*.png`) 와 `road/` (도로 zip 을 푼 것 → `road/GLB/*.glb`, `road/Textures/T_Palette.png`), `city/` (건물 zip 을 푼 것 → `city/Models/GLB format/*.glb`) 로 풀어 둔다
+1. 위 페이지들에서 `Models.zip`, `Textures.zip` (차), `LowPoly_City_Traffic_Lite_FREE.zip` (도로) 을 받는다
+2. 한 폴더 안에 `cars/` (Models.zip·Textures.zip 을 푼 것 → `cars/Models/*.fbx`, `cars/Textures/*.png`) 와 `road/` (도로 zip 을 푼 것 → `road/GLB/*.glb`, `road/Textures/T_Palette.png`) 로 풀어 둔다
 3. `python tools/assets/convert_assets.py <그 폴더>` → `app/src/main/assets/scene3d/` 를 다시 만든다. `--preview 그림.png` 를 붙이면 결과를 그림으로 볼 수 있다
 
 변환 도구(`tools/assets/`)는 표준 라이브러리만으로 FBX·GLB 를 읽는다 (미리보기에만 Pillow). 도로는 원본 2차선 조각(10m)을 차선 가운데에서 잘라 **3차선**(차선 폭 3.5m, 가운데 차선이 내 차선)으로 다시 이어 붙인다.
@@ -229,7 +235,10 @@ python tools/scenario/run_scenario.py merge --live --loop   # 영상으로 만�
 | `ui/scene3d/CarLook.kt` | 차 모양·색 정하기 |
 | `ui/GaragePanel.kt`, `ui/scene3d/GarageView.kt` | 내 차 고르기 (쇼룸 화면) |
 | `ui/scene3d/GlKit.kt` | 3D 화면들이 같이 쓰는 OpenGL 도구 (셰이더, 모델·그림 읽기) |
-| `map/OsmBuildings.kt`, `map/BuildingsSource.kt` | 지도 건물 자료 받기 → 3D 에 세울 상자로 바꾸기 |
+| `map/BuildingsSource.kt` | 내 위치 둘레의 지도 자료(건물·도로·횡단보도) 받기 |
+| `map/OsmBuildings.kt`, `map/OsmRoads.kt`, `map/CityMesh.kt` | 지도 자료 → 건물 윤곽·도로·횡단보도, 건물을 3D 로 세우기 |
+| `ui/scene3d/StripBuilder.kt` | 지도 도로를 바닥 띠로 (교차로에서 인도·차선 끊기) |
+| `net/Perception.kt` | 주변 차로 볼 범위 |
 | `vehicle/VehicleGateway.kt` | Vehicle SDK: 차량번호(CRN), 기어(P 여부), 방향지시등 |
 | `vehicle/PlateStore.kt` | 사용자가 등록한 내 차량번호·차종·차 색 저장 |
 | `location/LocationGateway.kt` | FusedLocation SDK: 내 위치 |

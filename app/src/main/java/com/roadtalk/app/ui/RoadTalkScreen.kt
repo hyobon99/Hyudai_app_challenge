@@ -53,6 +53,7 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     val voice by vm.voice.state.collectAsStateWithLifecycle()
     val navi by vm.navi.state.collectAsStateWithLifecycle()
     val cars by vm.nearbyCars.collectAsStateWithLifecycle()
+    val allCars by vm.allCars.collectAsStateWithLifecycle()
     val selected by vm.selectedPlate.collectAsStateWithLifecycle()
     val banner by vm.banner.collectAsStateWithLifecycle()
     val sent by vm.sent.collectAsStateWithLifecycle()
@@ -121,10 +122,11 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                 } else {
                     NavPanel(
                         myFix = myLocation,
-                        cars = cars,
+                        cars = allCars,
                         navi = navi,
                         onRequestRoute = vm::startRouteTo,
                         onCancelRoute = vm::cancelRoute,
+                        onVisibleRadius = vm::onMapRadius,
                         modifier = Modifier
                             .weight(0.58f)
                             .fillMaxHeight(),

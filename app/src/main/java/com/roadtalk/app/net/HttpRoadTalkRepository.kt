@@ -35,8 +35,10 @@ import java.net.URLEncoder
  */
 class HttpRoadTalkRepository(
     baseUrl: String,
-    private val radiusMeters: Int = 300,
+    radiusMeters: Int = 300,
 ) : RoadTalkRepository {
+
+    @Volatile override var searchRadiusMeters: Int = radiusMeters
 
     private data class Me(val plate: String, val pos: MyPosition?)
 
@@ -251,7 +253,7 @@ class HttpRoadTalkRepository(
     private fun queryNearby(current: Me) {
         val pos = current.pos
         val query = buildString {
-            append("plate=").append(enc(current.plate)).append("&radius=").append(radiusMeters)
+            append("plate=").append(enc(current.plate)).append("&radius=").append(searchRadiusMeters)
             if (pos != null) append("&lat=").append(pos.lat).append("&lng=").append(pos.lng)
         }
         val sentAt = System.currentTimeMillis()

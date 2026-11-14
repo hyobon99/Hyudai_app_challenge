@@ -77,12 +77,16 @@ fun NavPanel(
     navi: NaviGateway.State,
     onRequestRoute: (latitude: Double, longitude: Double) -> Unit,
     onCancelRoute: () -> Unit,
+    onVisibleRadius: (Int) -> Unit,
     modifier: Modifier,
 ) {
     val context = LocalContext.current
     val overlay = remember { CarsOverlay() }
     var pendingDestination by remember { mutableStateOf<GeoPoint?>(null) }
     val naviConnected by rememberUpdatedState(navi.connected)
+    val currentOnVisibleRadius by rememberUpdatedState(onVisibleRadius)
+    /** 지도에 지금 보이는 Car-ind CHAT 차 수 */
+    var carsOnMap by remember { mutableStateOf(0) }
     val mapView = remember {
         Configuration.getInstance().apply {
             // 타일 캐시를 앱 전용 폴더에 두고, OSM 타일 서버 정책에 따라 앱 식별자를 User-Agent 로 보낸다
@@ -106,6 +110,19 @@ fun NavPanel(
                 })
             )
             overlays.add(overlay)
+            // 지도에 보이는 범위(가운데에서 구석까지)를 알려서, 그 안의 차를 모두 찾게 한다
+            fun reportRadius() {
+                val box = boundingBox
+                if (box.latitudeSpan > 0.0) currentOnVisibleRadius((box.diagonalLengthInMeters / 2).toInt())
+            }
+            addOnFirstLayoutListener { _, _, _, _, _ -> reportRadius() }
+            addMapListener(object : org.osmdroid.events.MapListener {
+                override fun onScroll(event: org.osmdroid.events.ScrollEvent?) = false
+                override fun onZoom(event: org.osmdroid.events.ZoomEvent?): Boolean {
+                    reportRadius()
+                    return false
+                }
+            })
         }
     }
     DisposableEffect(mapView) {
@@ -125,6 +142,8 @@ fun NavPanel(
             overlay.others = cars.mapNotNull { it.toGeoPoint(fix) }
             mapView.mapOrientation = -fix.heading   // 진행 방향이 위
             mapView.controller.setCenter(me)
+            val box = mapView.boundingBox
+            carsOnMap = overlay.others.count { box.contains(it) }
         }
         mapView.invalidate()
     }
@@ -199,6 +218,20 @@ fun NavPanel(
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
+        // 지도에 보이는 범위 안의 Car-ind CHAT 차는 모두 점으로 표시된다
+        Text(
+            "● 지도 안 Car-ind CHAT 차 ${carsOnMap}대",
+            color = NavColors.Text,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 12.dp, bottom = 36.dp)
+                .shadow(6.dp, RoundedCornerShape(50))
+                .clip(RoundedCornerShape(50))
+                .background(Color.White)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        )
         Text(
             "© OpenStreetMap contributors",
             color = NavColors.TextSecondary,

@@ -32,6 +32,14 @@ interface RoadTalkRepository {
         get() = 0
         set(_) {}
 
+    /**
+     * 내 위치에서 몇 m 안의 차까지 찾을지. 지도에 보이는 범위가 넓어지면 그만큼 키워서, 지도에 보이는 곳의 차가 빠지지 않게 한다.
+     * 지원하지 않는 서버는 무시한다
+     */
+    var searchRadiusMeters: Int
+        get() = 300
+        set(_) {}
+
     suspend fun send(message: RoadMessage)
 
     /**

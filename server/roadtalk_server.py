@@ -110,7 +110,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             lat = float(qs["lat"]) if "lat" in qs else None
             lng = float(qs["lng"]) if "lng" in qs else None
-            radius = float(qs.get("radius", 300))
+            radius = min(float(qs.get("radius", 300)), 5000.0)   # 앱은 지도에 보이는 범위만큼 요청한다 (기본 300m, 최대 3km)
         except ValueError:
             return self.send_json(400, {"error": "invalid"})
         t = now_ms()

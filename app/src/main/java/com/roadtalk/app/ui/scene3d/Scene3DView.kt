@@ -9,19 +9,24 @@ import android.graphics.RectF
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.util.Log
+import com.roadtalk.app.map.CityMesh
+import com.roadtalk.app.map.OsmRoads
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.hypot
 import kotlin.math.sin
 
 /**
  * 내 차 뒤 위에서 본 3D 도로 화면 (OpenGL ES 2.0, 추가 라이브러리 없음).
- * 그리는 것: 3차선 도로(10m 토막을 이어 붙임) · 인도의 나무와 가로등 · 지도에서 가져온 주변 건물 · 내 차 · 주변 Car-ind CHAT 차 ·
- * 바닥 그림자 · 선택한 차의 빛 고리.
- * 모델은 assets/scene3d 의 .mesh 파일 (tools/assets/convert_assets.py 가 만든다), 색은 작은 팔레트 그림에서 가져온다.
+ * 그리는 것:
+ *  - 내가 달리는 길: 곧은 3차선 (10m 토막을 이어 붙임) 과 인도의 나무·가로등
+ *  - 지도(OpenStreetMap)에서 가져온 것: 내 길과 만나는 길·주변 길, 횡단보도, 실제 윤곽 모양대로 세운 건물
+ *  - 내 차, 주변 Car-ind CHAT 차, 바닥 그림자, 선택한 차의 빛 고리
+ * 차·도로·나무 모델은 assets/scene3d 의 .mesh 파일 (tools/assets/convert_assets.py 가 만든다).
  * 화면에 무엇을 그릴지는 [frame] 에 넣어 주면 다음 프레임부터 반영된다.
  */
 class Scene3DView(context: Context) : GLSurfaceView(context) {
@@ -29,13 +34,7 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
     /** 주변 차 한 대. lateral/forward = 내 차 기준 오른쪽/앞 (m), headingDeg = 내 진행 방향 기준 시계 방향 각도 */
     data class Car(val lateral: Float, val forward: Float, val headingDeg: Float, val type: Int, val skin: Int, val selected: Boolean)
 
-    /**
-     * 지도에서 가져온 건물 하나를 감싸는 네모 상자. east/north = 기준점에서 동쪽/북쪽으로 몇 m (상자 가운데),
-     * bearingDeg = 상자의 가로(width) 변이 향하는 방위 (0 = 북, 90 = 동), height = 높이 (m)
-     */
-    data class Building(val id: Long, val east: Float, val north: Float, val width: Float, val depth: Float, val bearingDeg: Float, val height: Float)
-
-    /** 건물과 같은 기준점에서 본 내 차 위치 (m) · 방위 · 속도 · 그 값이 측정된 시각 */
+    /** 지도 자료와 같은 기준점에서 본 내 차 위치 (m) · 방위 · 속도 · 그 값이 측정된 시각 */
     data class Ego(val east: Float, val north: Float, val headingDeg: Float, val speedMps: Float, val atMillis: Long)
 
     data class Frame(
@@ -46,8 +45,10 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         val rearM: Float = 7f,
         /** 내 차 속도 (m/s). 도로가 이 속도로 뒤로 흘러간다. 모르면 0 */
         val speedMps: Float = 0f,
-        val buildings: List<Building> = emptyList(),
-        /** 건물을 그리려면 필요. 없으면 건물은 그리지 않는다 */
+        /** 지도에서 가져온 건물 · 도로 · 횡단보도 (기준점 기준 좌표). 그리려면 [ego] 가 있어야 한다 */
+        val city: CityMesh? = null,
+        val roads: List<OsmRoads.Road> = emptyList(),
+        val crossings: List<OsmRoads.Crossing> = emptyList(),
         val ego: Ego? = null,
     )
 
@@ -55,7 +56,8 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
 
     init {
         setEGLContextClientVersion(2)
-        setEGLConfigChooser(8, 8, 8, 8, 16, 8)      // 그림자가 겹쳐 진해지지 않게 스텐실 버퍼를 쓴다
+        // 깊이 24비트: 도로 위에 얇게 겹쳐 까는 것(차선·교차로·횡단보도)이 멀리서 깜빡이지 않게. 스텐실: 그림자가 겹쳐 진해지지 않게
+        setEGLConfigChooser(8, 8, 8, 8, 24, 8)
         setRenderer(SceneRenderer())
         renderMode = RENDERMODE_CONTINUOUSLY
     }
@@ -70,9 +72,18 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private var quad: GlKit.Mesh? = null
         private var cityTexture = 0
         private var ringTexture = 0
-        /** 건물 모델 (바닥이 1m × 1m, height = 높이 ÷ 긴 바닥 변). 납작한 것부터 길쭉한 것 순. 없으면 건물은 안 그린다 */
-        private var buildingMeshes = listOf<GlKit.Mesh>()
-        private var buildingTexture = 0
+        private var windowTexture = 0
+        private var zebraTexture = 0
+
+        /** 지도 건물 (구역이 바뀌면 다시 올린다) */
+        private var cityMesh: GlKit.Mesh? = null
+        private var uploadedCity: CityMesh? = null
+        /** 지도 도로 (내 위치 기준이라 매 프레임 다시 만든다) */
+        private var stripMesh: GlKit.Mesh? = null
+        private val strips = StripBuilder()
+        /** 내 길을 가로지르는 띠들 (ax az dx dz 길이 반폭). 이 자리의 나무·가로등은 그리지 않는다 */
+        private var openings = FloatArray(6 * 32)
+        private var openingCount = 0
 
         private var width = 1
         private var height = 1
@@ -83,12 +94,14 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private var buildingsDrawn = 0
         /** 도로가 뒤로 흘러간 거리 (m, 0 ~ SCROLL_PERIOD) */
         private var scroll = 0f
-        /** 건물 기준 내 차의 부드럽게 이어 붙인 위치·방위 (GPS 는 1초에 한 번이라 그대로 쓰면 건물이 뚝뚝 끊긴다) */
+        /** 지도 기준 내 차의 부드럽게 이어 붙인 위치·방위 (GPS 는 1초에 한 번이라 그대로 쓰면 지도가 뚝뚝 끊긴다) */
         private var egoEast = 0f
         private var egoNorth = 0f
         private var egoHeading = 0f
         private var egoReady = false
-        /** 도로 위에 걸친 건물을 어느 쪽으로 밀어냈는지 (한번 정하면 그대로 둬서 좌우로 튀지 않게) */
+        private var ch = 1f
+        private var sh = 0f
+        /** 내 길 위에 걸친 건물을 어느 쪽으로 밀어냈는지 (한번 정하면 그대로 둬서 좌우로 튀지 않게) */
         private val pushedSide = HashMap<Long, Float>()
 
         override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -104,18 +117,14 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             } catch (e: Exception) {
                 Log.e(GlKit.TAG, "도로 모델을 읽지 못했어요 (README '3D 에셋' 참고)", e)
             }
-            buildingMeshes = try {
-                val names = context.assets.list(GlKit.DIR).orEmpty().filter { it.startsWith("bld_") }.sorted()
-                val meshes = names.map { kit.loadMesh(it) }.sortedBy { it.height }
-                if (meshes.isNotEmpty()) buildingTexture = kit.loadTexture(kit.assetBitmap("buildings.png"))
-                meshes
-            } catch (e: Exception) {
-                Log.w(GlKit.TAG, "건물 모델이 없어 건물은 그리지 않아요")
-                emptyList()
-            }
             ringTexture = kit.loadTexture(ringBitmap(), smooth = true)
+            windowTexture = kit.loadTexture(windowBitmap(), smooth = true, tiled = true)
+            zebraTexture = kit.loadTexture(zebraBitmap(), smooth = true)
             quad = kit.groundQuad()
-            Log.d(GlKit.TAG, "3D scene ready: ${cars.size} car models, ${skins.size} skins, ${buildingMeshes.size} building models")
+            stripMesh = kit.dynamicMesh()
+            cityMesh = null
+            uploadedCity = null
+            Log.d(GlKit.TAG, "3D scene ready: ${cars.size} car models, ${skins.size} skins")
         }
 
         override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -130,7 +139,7 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             lastNanos = now
             frames++
             if (now - framesSince > 5_000_000_000L) {
-                if (framesSince != 0L) Log.d(GlKit.TAG, "fps=%.0f buildings=%d".format(frames * 1e9f / (now - framesSince), buildingsDrawn))
+                if (framesSince != 0L) Log.d(GlKit.TAG, "fps=%.0f buildings=%d roadTriangles=%d".format(frames * 1e9f / (now - framesSince), buildingsDrawn, strips.size / 24))
                 frames = 0
                 framesSince = now
             }
@@ -147,25 +156,42 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             // 도로 밖 땅
             kit.draw(quad, kit.white, vp, Mat4.multiply(Mat4.translation(0f, -0.03f, 0f), Mat4.scale(4000f, 1f, 4000f)), GROUND)
 
-            // 도로 · 나무 · 가로등: 카메라 뒤부터 안개 끝까지, 20m 무늬가 scroll 만큼 뒤로 흘러간다
+            // 지도의 길 (내 길과 만나는 길, 주변 길) 과 횡단보도
+            val onMap = updateEgo(f, dt)
+            openingCount = 0
+            strips.reset()
+            if (onMap) {
+                buildStrips(f, camera)
+                kit.fill(stripMesh!!, strips.data, strips.size)
+                kit.draw(stripMesh, kit.white, vp, Mat4.identity(), ASPHALT)
+                drawCrossings(f, camera, vp)
+            }
+
+            // 내 길 · 나무 · 가로등: 카메라 뒤부터 안개 끝까지, 20m 무늬가 scroll 만큼 뒤로 흘러간다
             val zNear = ceil((camera.eye[2] + 10f) / SCROLL_PERIOD) * SCROLL_PERIOD
             val zFar = -camera.fogEnd
             val scenery = ArrayList<Pair<GlKit.Mesh?, FloatArray>>()
+            fun plant(mesh: GlKit.Mesh?, x: Float, z: Float, turned: Boolean) {
+                if (inOpening(x, z)) return       // 교차하는 길 위에는 세우지 않는다
+                val at = Mat4.translation(x, CURB_Y, z)
+                scenery += mesh to (if (turned) Mat4.multiply(at, Mat4.rotationY(180f)) else at)
+            }
             var z = zNear + scroll
             while (z > zFar) {
                 kit.draw(road, cityTexture, vp, Mat4.translation(0f, 0f, z), GlKit.WHITE)
                 kit.draw(road, cityTexture, vp, Mat4.translation(0f, 0f, z - 10f), GlKit.WHITE)
-                scenery += tree to Mat4.translation(-SIDE_X, CURB_Y, z - 3f)
-                scenery += tree to Mat4.translation(SIDE_X, CURB_Y, z - 8f)
-                scenery += tree to Mat4.translation(-SIDE_X, CURB_Y, z - 13f)
-                scenery += tree to Mat4.translation(SIDE_X, CURB_Y, z - 18f)
-                scenery += lamp to Mat4.translation(-LAMP_X, CURB_Y, z)
-                scenery += lamp to Mat4.multiply(Mat4.translation(LAMP_X, CURB_Y, z - 10f), Mat4.rotationY(180f))
+                plant(tree, -SIDE_X, z - 3f, false)
+                plant(tree, SIDE_X, z - 8f, false)
+                plant(tree, -SIDE_X, z - 13f, false)
+                plant(tree, SIDE_X, z - 18f, false)
+                plant(lamp, -LAMP_X, z, false)
+                plant(lamp, LAMP_X, z - 10f, true)
                 z -= SCROLL_PERIOD
             }
             scenery.forEach { (mesh, model) -> kit.draw(mesh, cityTexture, vp, model, GlKit.WHITE) }
 
-            drawBuildings(f, dt, camera, vp)
+            buildingsDrawn = 0
+            if (onMap) drawBuildings(f, camera, vp)
 
             // 차 위치
             val myModel = Mat4.identity()
@@ -179,7 +205,7 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             GLES20.glEnable(GLES20.GL_STENCIL_TEST)
             GLES20.glStencilFunc(GLES20.GL_EQUAL, 0, 0xFF)
             GLES20.glStencilOp(GLES20.GL_KEEP, GLES20.GL_KEEP, GLES20.GL_INCR)
-            val roadShadow = Mat4.shadow(GlKit.LIGHT, 0.03f)
+            val roadShadow = Mat4.shadow(GlKit.LIGHT, SHADOW_Y)
             val curbShadow = Mat4.shadow(GlKit.LIGHT, CURB_Y + 0.03f)
             kit.draw(cars.getOrNull(f.myType), kit.white, vp, Mat4.multiply(roadShadow, myModel), SHADOW, unlit = true)
             others.forEach { (car, model) -> kit.draw(cars.getOrNull(car.type), kit.white, vp, Mat4.multiply(roadShadow, model), SHADOW, unlit = true) }
@@ -191,7 +217,7 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
                 val mesh = cars.getOrNull(car.type)
                 val w = (mesh?.halfX ?: 1f) * 2f + 2.2f
                 val l = (mesh?.halfZ ?: 2.3f) * 2f + 3f
-                val ring = Mat4.multiply(model, Mat4.multiply(Mat4.translation(0f, 0.05f, 0f), Mat4.scale(w, 1f, l)))
+                val ring = Mat4.multiply(model, Mat4.multiply(Mat4.translation(0f, SHADOW_Y + 0.02f, 0f), Mat4.scale(w, 1f, l)))
                 kit.draw(quad, ringTexture, vp, ring, GlKit.WHITE, unlit = true)
             }
             GLES20.glDepthMask(true)
@@ -202,14 +228,12 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         }
 
         /**
-         * 지도 건물을 내 차 기준 자리에 세운다. 우리 도로는 실제 도로 모양이 아니라 내 진행 방향으로 곧게 그린 3차선이라,
-         * 그 위에 걸치는 건물은 가까운 쪽 길가로 밀어낸다.
+         * 지도 위의 내 위치를 부드럽게 이어 붙인다: 마지막 측정 뒤 달린 만큼 앞으로 옮긴 자리를 목표로 따라간다.
+         * 지도 자료나 내 위치가 없으면 false (지도는 그리지 않는다)
          */
-        private fun drawBuildings(f: Frame, dt: Float, camera: Camera3D, vp: FloatArray) {
-            buildingsDrawn = 0
-            val ego = f.ego ?: return
-            if (buildingMeshes.isEmpty() || f.buildings.isEmpty()) return
-            // 마지막 위치 측정 뒤 달린 만큼 앞으로 옮긴 자리를 목표로, 부드럽게 따라간다
+        private fun updateEgo(f: Frame, dt: Float): Boolean {
+            val ego = f.ego ?: return false
+            if (f.city == null && f.roads.isEmpty()) return false
             val age = ((System.currentTimeMillis() - ego.atMillis) / 1000f).coerceIn(0f, 1.5f)
             val h = Math.toRadians(ego.headingDeg.toDouble())
             val targetEast = ego.east + sin(h).toFloat() * ego.speedMps * age
@@ -229,59 +253,141 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
                 egoHeading += dh * k
             }
             val heading = Math.toRadians(egoHeading.toDouble())
-            val ch = cos(heading).toFloat()
-            val sh = sin(heading).toFloat()
+            ch = cos(heading).toFloat()
+            sh = sin(heading).toFloat()
+            return true
+        }
+
+        /** 지도 좌표 (동, 북) → 내 차 기준 오른쪽 (x) */
+        private fun rightOf(east: Float, north: Float) = (east - egoEast) * ch - (north - egoNorth) * sh
+
+        /** 지도 좌표 (동, 북) → 내 차 기준 앞 (화면 좌표로는 z = −앞) */
+        private fun forwardOf(east: Float, north: Float) = (north - egoNorth) * ch + (east - egoEast) * sh
+
+        /**
+         * 지도 도로를 바닥 띠로 만든다. 내가 달리는 길(내 진행 방향과 거의 나란하고 내 바로 곁을 지나는 구간)은
+         * 이미 곧은 3차선으로 그리고 있으니 빼고, 그 길과 만나는 길과 주변의 다른 길만 깐다.
+         */
+        private fun buildStrips(f: Frame, camera: Camera3D) {
             val far = camera.fogEnd
-            val near = camera.eye[2] + 30f
-            var drawn = 0
-            if (pushedSide.size > 4000) pushedSide.clear()
-            for (b in f.buildings) {
-                val de = b.east - egoEast
-                val dn = b.north - egoNorth
-                val forward = dn * ch + de * sh
-                var right = de * ch - dn * sh
-                if (forward > far || forward < -near || abs(right) > far) continue
-                // 메시의 +X(가로) 가 건물의 가로 변 방위를 향하도록 돌린다
-                var rotation = 90f - (b.bearingDeg - egoHeading)
-                val r = Math.toRadians(rotation.toDouble())
-                val halfAcross = (abs(cos(r)) * b.width / 2 + abs(sin(r)) * b.depth / 2).toFloat()
-                if (abs(right) - halfAcross < ROAD_HALF_M) {
-                    val side = pushedSide.getOrPut(b.id) { if (right >= 0f) 1f else -1f }
-                    right = side * (ROAD_HALF_M + halfAcross)
-                }
-                // 건물 정면(메시의 +Z)이 도로 쪽을 보게: 네 방향 중 도로를 가장 똑바로 보는 쪽으로 돌린다 (90도 돌리면 가로·세로가 바뀐다)
-                var across = b.width
-                var along = b.depth
-                var best = Float.MAX_VALUE
-                var turns = 0
-                for (k in 0 until 4) {
-                    val facing = sin(Math.toRadians((rotation + 90f * k).toDouble())).toFloat() * (if (right >= 0f) 1f else -1f)
-                    if (facing < best) {
-                        best = facing
-                        turns = k
+            val behind = camera.eye[2] + 40f
+            for (road in f.roads) {
+                val p = road.points
+                val half = road.width / 2
+                var x0 = rightOf(p[0], p[1])
+                var z0 = -forwardOf(p[0], p[1])
+                for (i in 1 until p.size / 2) {
+                    val x1 = rightOf(p[i * 2], p[i * 2 + 1])
+                    val z1 = -forwardOf(p[i * 2], p[i * 2 + 1])
+                    val ax = x0
+                    val az = z0
+                    x0 = x1
+                    z0 = z1
+                    // 화면 범위 밖
+                    if ((az > behind && z1 > behind) || (az < -far && z1 < -far) || (ax > far && x1 > far) || (ax < -far && x1 < -far)) continue
+                    val length = hypot(x1 - ax, z1 - az)
+                    if (length < 0.05f) continue
+                    val dx = (x1 - ax) / length
+                    val dz = (z1 - az) / length
+                    // 넓은 길은 중심선이 내 자리에서 멀어도 내가 그 길 위에 있는 것이다 → 길 폭의 절반까지는 '내 곁' 으로 본다
+                    val nearMe = minOf(abs(ax), abs(x1)) < maxOf(MY_ROAD_NEAR_M, half + MY_ROAD_MARGIN_M) || ax * x1 < 0f
+                    if (abs(dx) < PARALLEL_SIN && nearMe) continue      // 내가 달리는 길
+                    strips.strip(ax, az, x1, z1, half)
+                    // 내 길의 인도까지 닿는 띠는 '뚫린 자리' 로 적어 둔다
+                    if (minOf(ax, x1) - half < OPENING_REACH_M && maxOf(ax, x1) + half > -OPENING_REACH_M && openingCount < openings.size / 6) {
+                        val o = openingCount * 6
+                        openings[o] = ax; openings[o + 1] = az; openings[o + 2] = dx; openings[o + 3] = dz
+                        openings[o + 4] = length; openings[o + 5] = half
+                        openingCount++
                     }
                 }
-                rotation += 90f * turns
-                if (turns % 2 == 1) {
-                    across = b.depth
-                    along = b.width
-                }
-                // 생김새(높이 ÷ 긴 변)가 비슷한 모델 몇 개 중에서 건물마다 하나를 정해 쓴다
-                val shape = b.height / maxOf(b.width, b.depth)
-                var nearest = 0
-                for (i in buildingMeshes.indices) {
-                    if (abs(buildingMeshes[i].height - shape) < abs(buildingMeshes[nearest].height - shape)) nearest = i
-                }
-                val pick = (nearest + ((b.id and 0x7FFFFFFF) % 3).toInt() - 1).coerceIn(0, buildingMeshes.size - 1)
-                val mesh = buildingMeshes[pick]
-                val model = Mat4.multiply(
-                    Mat4.translation(right, 0f, -forward),
-                    Mat4.multiply(Mat4.rotationY(rotation), Mat4.scale(across, b.height / mesh.height, along)),
-                )
-                kit.draw(mesh, buildingTexture, vp, model, GlKit.WHITE)
-                buildingsDrawn = ++drawn
-                if (drawn >= MAX_BUILDINGS) break
             }
+        }
+
+        private fun inOpening(x: Float, z: Float): Boolean {
+            for (k in 0 until openingCount) {
+                val o = k * 6
+                val px = x - openings[o]
+                val pz = z - openings[o + 1]
+                val along = px * openings[o + 2] + pz * openings[o + 3]
+                val across = abs(-px * openings[o + 3] + pz * openings[o + 2])
+                val half = openings[o + 5]
+                if (along > -half && along < openings[o + 4] + half && across < half + 1.6f) return true
+            }
+            return false
+        }
+
+        /**
+         * 횡단보도. 내 길을 건너는 것은 내 3차선 폭에 맞춰 가로로 깔고, 다른 길의 것은 그 길의 방향·폭에 맞춘다.
+         * 흰 줄은 차가 달리는 방향과 나란하다.
+         */
+        private fun drawCrossings(f: Frame, camera: Camera3D, vp: FloatArray) {
+            val far = camera.fogEnd
+            val behind = camera.eye[2] + 20f
+            for (c in f.crossings) {
+                val x = rightOf(c.east, c.north)
+                val z = -forwardOf(c.east, c.north)
+                if (z > behind || z < -far || abs(x) > far) continue
+                val relative = c.bearingDeg - egoHeading          // 그 도로가 내 진행 방향과 이루는 각
+                val alongMe = abs(sin(Math.toRadians(relative.toDouble()))) < PARALLEL_SIN
+                val model = if (alongMe && abs(x) < maxOf(MY_ROAD_NEAR_M, c.roadWidth / 2 + MY_ROAD_MARGIN_M)) {
+                    Mat4.multiply(Mat4.translation(0f, StripBuilder.ON_LANES_Y + 0.012f, z), Mat4.scale(MY_LANES_M, 1f, CROSSING_DEPTH_M))
+                } else {
+                    Mat4.multiply(
+                        Mat4.translation(x, StripBuilder.heightAt(x) + 0.012f, z),
+                        Mat4.multiply(Mat4.rotationY(-relative), Mat4.scale(c.roadWidth, 1f, CROSSING_DEPTH_M)),
+                    )
+                }
+                kit.draw(quad, zebraTexture, vp, model, GlKit.WHITE)
+            }
+        }
+
+        /**
+         * 지도 건물을 실제 윤곽 모양대로, 실제 자리에 세운다. 우리 '내 길' 은 실제 도로보다 넓거나 좁을 수 있어서,
+         * 그 위에 걸치는 건물만 걸친 만큼 길가로 밀어낸다.
+         */
+        private fun drawBuildings(f: Frame, camera: Camera3D, vp: FloatArray) {
+            val city = f.city ?: return
+            if (city !== uploadedCity) {
+                kit.delete(cityMesh)
+                cityMesh = if (city.vertices.isEmpty()) null else kit.upload(city.vertices)
+                uploadedCity = city
+                pushedSide.clear()
+                Log.d(GlKit.TAG, "city mesh: ${city.buildings.size} buildings, ${city.vertices.size / 24} triangles")
+            }
+            val mesh = cityMesh ?: return
+            // 지도 좌표 (x = 동, z = −북) → 내 차 기준: 내 위치를 원점으로 옮기고 내 방위만큼 돌린다
+            val base = Mat4.multiply(Mat4.rotationY(egoHeading), Mat4.translation(-egoEast, 0f, egoNorth))
+            val far = camera.fogEnd
+            val behind = camera.eye[2] + 30f
+            var drawn = 0
+            for (b in city.buildings) {
+                val forward = forwardOf(b.east, b.north)
+                val right = rightOf(b.east, b.north)
+                if (forward - b.radius > far || forward + b.radius < -behind || abs(right) - b.radius > far) continue
+                var shift = 0f
+                if (abs(right) - b.radius < ROAD_HALF_M) {
+                    // 윤곽이 내 길에 얼마나 걸치는지 꼭짓점으로 잰다
+                    var minRight = Float.MAX_VALUE
+                    var maxRight = -Float.MAX_VALUE
+                    val ring = b.ring
+                    for (i in 0 until ring.size / 2) {
+                        val r = rightOf(ring[i * 2], ring[i * 2 + 1])
+                        minRight = minOf(minRight, r)
+                        maxRight = maxOf(maxRight, r)
+                    }
+                    if (minRight < ROAD_HALF_M && maxRight > -ROAD_HALF_M) {
+                        val side = pushedSide.getOrPut(b.id) { if (right >= 0f) 1f else -1f }
+                        shift = if (side > 0f) ROAD_HALF_M - minRight else -ROAD_HALF_M - maxRight
+                    }
+                }
+                val model = if (shift == 0f) base else Mat4.multiply(Mat4.translation(shift, 0f, 0f), base)
+                val tone = TONES[((b.id and 0x7FFFFFFF) % TONES.size).toInt()]
+                kit.draw(mesh, windowTexture, vp, model, tone, first = b.first, count = b.wallCount)
+                kit.draw(mesh, kit.white, vp, model, ROOF, first = b.first + b.wallCount, count = b.roofCount)
+                if (++drawn >= MAX_BUILDINGS) break
+            }
+            buildingsDrawn = drawn
         }
 
         private fun skinTexture(skin: Int) = if (skins.isEmpty()) kit.white else skins[skin.mod(skins.size)]
@@ -310,6 +416,31 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             canvas.drawRoundRect(rect, 30f, 30f, line)
             return bitmap
         }
+
+        /** 건물 벽에 되풀이해 까는 무늬: 가로 4m · 세로 한 층(3.2m) 칸마다 창문 하나. 바탕은 흰색이라 건물마다 다른 색을 입힐 수 있다 */
+        private fun windowBitmap(): Bitmap {
+            val size = 64
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(0xFFFFFFFF.toInt())
+            val glass = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF6C7F96.toInt() }
+            canvas.drawRect(12f, 14f, 52f, 46f, glass)
+            val shine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF8DA0B6.toInt() }
+            canvas.drawRect(12f, 14f, 52f, 22f, shine)
+            return bitmap
+        }
+
+        /** 횡단보도: 아스팔트 바탕에 흰 줄 8개 (줄은 그림의 세로 방향 = 차가 달리는 방향) */
+        private fun zebraBitmap(): Bitmap {
+            val w = 256
+            val h = 32
+            val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(0xFF4A4C50.toInt())
+            val white = Paint().apply { color = 0xFFF0F0EA.toInt() }
+            for (i in 0 until 8) canvas.drawRect(i * 32f + 7f, 0f, i * 32f + 25f, h.toFloat(), white)
+            return bitmap
+        }
     }
 
     companion object {
@@ -318,11 +449,34 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private const val CURB_Y = 0.15f
         private const val SIDE_X = 6.6f
         private const val LAMP_X = 6.0f
-        /** 도로 가운데에서 인도 바깥 끝까지 (m). 건물은 이보다 안쪽으로 들어오지 않는다 */
-        private const val ROAD_HALF_M = 8.2f
-        private const val MAX_BUILDINGS = 220
+        /** 내 길의 가운데에서 인도 바깥 끝 조금 밖까지 (m). 건물은 이보다 안쪽으로 들어오지 않는다 */
+        private const val ROAD_HALF_M = 7.6f
+        private const val MAX_BUILDINGS = 320
+        /** 내 진행 방향과 이 각(약 25도)보다 덜 벌어지고, 내 곁 이 거리 안을 지나는 지도 도로는 '내가 달리는 길' 로 본다 */
+        private const val PARALLEL_SIN = 0.42f
+        private const val MY_ROAD_NEAR_M = 14f
+        private const val MY_ROAD_MARGIN_M = 8f
+        /** 띠가 내 길의 인도(가운데에서 이 거리)까지 닿으면 그 자리의 나무·가로등을 치운다 */
+        private const val OPENING_REACH_M = 8f
+        /** 내 3차선의 폭과 횡단보도의 두께 (m) */
+        private const val MY_LANES_M = 10.5f
+        private const val CROSSING_DEPTH_M = 4f
+        /** 차 그림자를 까는 높이: 교차로 띠와 횡단보도보다 위 */
+        private const val SHADOW_Y = 0.07f
         private val SKY = floatArrayOf(0.925f, 0.933f, 0.949f)
         private val GROUND = floatArrayOf(0.86f, 0.87f, 0.885f, 1f)
         private val SHADOW = floatArrayOf(0f, 0f, 0f, 0.26f)
+        /** 내 길 토막의 아스팔트와 같은 색 */
+        private val ASPHALT = floatArrayOf(0.29f, 0.298f, 0.314f, 1f)
+        private val ROOF = floatArrayOf(0.80f, 0.81f, 0.83f, 1f)
+        /** 건물 벽 색 (건물마다 하나) */
+        private val TONES = arrayOf(
+            floatArrayOf(0.93f, 0.94f, 0.96f, 1f),
+            floatArrayOf(0.95f, 0.92f, 0.87f, 1f),
+            floatArrayOf(0.84f, 0.87f, 0.92f, 1f),
+            floatArrayOf(0.90f, 0.90f, 0.90f, 1f),
+            floatArrayOf(0.88f, 0.91f, 0.88f, 1f),
+            floatArrayOf(0.97f, 0.95f, 0.93f, 1f),
+        )
     }
 }

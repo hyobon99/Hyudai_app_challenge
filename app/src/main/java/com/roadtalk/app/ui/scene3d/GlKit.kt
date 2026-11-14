@@ -17,7 +17,7 @@ import java.nio.ByteOrder
 internal class GlKit(private val context: Context) {
 
     /** 정점 묶음 + 크기 (m). half* = 가운데에서 좌우·앞뒤 끝까지, height = 바닥에서 꼭대기까지 */
-    class Mesh(val vbo: Int, val vertexCount: Int, val halfX: Float, val height: Float, val halfZ: Float)
+    class Mesh(val vbo: Int, var vertexCount: Int, val halfX: Float, val height: Float, val halfZ: Float)
 
     private var program = 0
     private var aPos = 0
@@ -69,7 +69,10 @@ internal class GlKit(private val context: Context) {
     }
 
     /** unlit = 조명 없이 그림 색 그대로 (그림자, 바닥 무늬 등) */
-    fun draw(mesh: Mesh?, texture: Int, viewProjection: FloatArray, model: FloatArray, tint: FloatArray, unlit: Boolean = false) {
+    fun draw(
+        mesh: Mesh?, texture: Int, viewProjection: FloatArray, model: FloatArray, tint: FloatArray, unlit: Boolean = false,
+        first: Int = 0, count: Int = -1,
+    ) {
         mesh ?: return
         GLES20.glUniformMatrix4fv(uMvp, 1, false, Mat4.multiply(viewProjection, model), 0)
         GLES20.glUniformMatrix4fv(uModel, 1, false, model, 0)
@@ -83,7 +86,30 @@ internal class GlKit(private val context: Context) {
         GLES20.glVertexAttribPointer(aNormal, 3, GLES20.GL_FLOAT, false, STRIDE, 12)
         GLES20.glEnableVertexAttribArray(aUv)
         GLES20.glVertexAttribPointer(aUv, 2, GLES20.GL_FLOAT, false, STRIDE, 24)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.vertexCount)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, first, if (count < 0) mesh.vertexCount else count)
+    }
+
+    /** 매 프레임 내용이 바뀌는 메시 (지도 도로처럼 내 위치에 따라 다시 만드는 것). [fill] 로 채운다 */
+    fun dynamicMesh(): Mesh {
+        val ids = IntArray(1)
+        GLES20.glGenBuffers(1, ids, 0)
+        return Mesh(ids[0], 0, 0f, 0f, 0f)
+    }
+
+    private var scratch = ByteBuffer.allocateDirect(4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+
+    fun fill(mesh: Mesh, vertices: FloatArray, floatCount: Int) {
+        if (scratch.capacity() < floatCount) scratch = ByteBuffer.allocateDirect(floatCount * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        scratch.clear()
+        scratch.put(vertices, 0, floatCount).position(0)
+        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, mesh.vbo)
+        GLES20.glBufferData(GLES20.GL_ARRAY_BUFFER, floatCount * 4, scratch, GLES20.GL_DYNAMIC_DRAW)
+        mesh.vertexCount = floatCount / 8
+    }
+
+    fun delete(mesh: Mesh?) {
+        mesh ?: return
+        GLES20.glDeleteBuffers(1, intArrayOf(mesh.vbo), 0)
     }
 
     /** assets/scene3d 의 .mesh 파일 ("RTM1", 정점 수, 정점마다 x y z nx ny nz u v) */
@@ -130,16 +156,22 @@ internal class GlKit(private val context: Context) {
     fun assetBitmap(name: String): Bitmap = context.assets.open("$DIR/$name").use { BitmapFactory.decodeStream(it) }
 
     /** 팔레트 그림은 칸마다 한 가지 색이라, 색이 번지지 않게 가장 가까운 점만 읽는다 (smooth = false) */
-    fun loadTexture(bitmap: Bitmap, smooth: Boolean = false): Int {
+    fun loadTexture(bitmap: Bitmap, smooth: Boolean = false, tiled: Boolean = false): Int {
         val ids = IntArray(1)
         GLES20.glGenTextures(1, ids, 0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, ids[0])
         val filter = if (smooth) GLES20.GL_LINEAR else GLES20.GL_NEAREST
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, filter)
         GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, filter)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        // tiled = 벽의 창문 무늬처럼 되풀이해 까는 그림 (크기가 2의 거듭제곱이어야 한다). 멀리서 자글거리지 않게 작은 판도 만들어 둔다
+        val wrap = if (tiled) GLES20.GL_REPEAT else GLES20.GL_CLAMP_TO_EDGE
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, wrap)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, wrap)
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        if (tiled) {
+            GLES20.glGenerateMipmap(GLES20.GL_TEXTURE_2D)
+            GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR_MIPMAP_LINEAR)
+        }
         bitmap.recycle()
         return ids[0]
     }

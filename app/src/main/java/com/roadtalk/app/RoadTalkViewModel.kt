@@ -15,6 +15,7 @@ import com.roadtalk.app.net.FirestoreRoadTalkRepository
 import com.roadtalk.app.net.HttpRoadTalkRepository
 import com.roadtalk.app.net.ServerStore
 import com.roadtalk.app.map.BuildingsSource
+import com.roadtalk.app.net.Perception
 import com.roadtalk.app.map.OsmBuildings
 import com.roadtalk.app.ui.scene3d.CarLook
 import com.roadtalk.app.vehicle.PlateStore
@@ -60,7 +61,11 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.Eagerly, _repository.value.backendName)
     val backendStatus: StateFlow<String?> = _repository.flatMapLatest { it.status }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-    val nearbyCars: StateFlow<List<NearbyCar>> = _repository.flatMapLatest { it.nearbyCars }
+    /** 서버가 알려 준 차 전부 (지도에 보이는 범위). 지도에 점으로 표시한다 */
+    val allCars: StateFlow<List<NearbyCar>> = _repository.flatMapLatest { it.nearbyCars }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    /** 그중 '주변 차' (net/Perception: 방향마다 정한 거리 안). 3D 도로에 그리고 메시지 대상으로 삼는다 */
+    val nearbyCars: StateFlow<List<NearbyCar>> = allCars.map { cars -> cars.filter(Perception::sees) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     private val _messages = MutableStateFlow<List<RoadMessage>>(emptyList())
@@ -101,6 +106,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
     val buildings: StateFlow<OsmBuildings.Area?> = buildingsSource.area
 
+    /** 지도에 지금 보이는 범위 (내 위치에서 지도 구석까지, m). 이 안의 차를 모두 찾도록 검색 반경으로 쓴다 */
+    private val _mapRadius = MutableStateFlow(MIN_SEARCH_RADIUS_M)
+
     /** '내 차 고르기' 화면이 열려 있는지 (열리면 오른쪽 지도 자리에 뜬다) */
     private val _garageOpen = MutableStateFlow(false)
     val garageOpen: StateFlow<Boolean> = _garageOpen.asStateFlow()
@@ -126,6 +134,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
 
         viewModelScope.launch {
             _repository.flatMapLatest { it.incoming }.collect(::onIncoming)
+        }
+        viewModelScope.launch {
+            combine(_repository, _mapRadius) { repo, radius -> repo to radius }.collect { (repo, radius) -> repo.searchRadiusMeters = radius }
         }
         viewModelScope.launch {
             combine(_repository, _mySkin, _myCarType) { repo, skin, type -> Triple(repo, skin, type) }.collect { (repo, skin, type) ->
@@ -170,6 +181,11 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         val value = type.coerceIn(0, CarLook.TYPE_COUNT - 1)
         plateStore.saveType(value)
         _myCarType.value = value
+    }
+
+    /** 지도가 보여 주는 범위가 바뀌면 (확대·축소) 불린다. 너무 넓게 축소해도 [MAX_SEARCH_RADIUS_M] 까지만 찾는다 */
+    fun onMapRadius(meters: Int) {
+        _mapRadius.value = meters.coerceIn(MIN_SEARCH_RADIUS_M, MAX_SEARCH_RADIUS_M)
     }
 
     fun openGarage() {
@@ -363,7 +379,7 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun positionOf(plate: String): RelativePosition? {
         val key = VoiceCommandParser.normalizePlate(plate)
-        return nearbyCars.value.firstOrNull { VoiceCommandParser.normalizePlate(it.plate) == key }?.position
+        return allCars.value.firstOrNull { VoiceCommandParser.normalizePlate(it.plate) == key }?.position
     }
 
     private fun showNotice(text: String) {
@@ -383,6 +399,9 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private companion object {
+        /** 주변 차 검색 반경 (m): 지도가 좁게 보여도 이만큼은 찾고, 아무리 넓게 봐도 이보다 멀리는 찾지 않는다 */
+        const val MIN_SEARCH_RADIUS_M = 300
+        const val MAX_SEARCH_RADIUS_M = 3000
         const val FALLBACK_PLATE = "99허 0000"
     }
 }

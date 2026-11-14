@@ -91,9 +91,12 @@ private const val CAR_LENGTH_M = 4.6f
 private const val CAR_HEIGHT_M = 1.6f
 /** 이름표를 차 꽁무니에서 얼마나 뒤에 둘지 (m) */
 private const val TAG_GAP_M = 0.7f
-/** 이보다 멀리 있는 차는 이 자리까지 당겨서 그린다 (m) */
-private const val MAX_SHOWN_FRONT_M = 70f
-private const val MAX_SHOWN_SIDE_M = 6.8f
+/**
+ * 앞·옆의 차는 실제 위치에 그린다 (옆길에 있으면 옆길 자리에). 다만 이보다 먼 차는 3D 화면에서는 안개 너머라 이 자리까지 당겨 그린다 (m).
+ * 지도에는 언제나 실제 위치에 점으로 나온다
+ */
+private const val MAX_SHOWN_FRONT_M = 260f
+private const val MAX_SHOWN_SIDE_M = 260f
 private val SKY_COLOR = Color(0xFFECEEF2)
 private val TAG_BACKGROUND = Color(0xCC1B2230)
 /**
@@ -157,10 +160,7 @@ fun BirdEyePanel(
         sceneView.onResume()
         onDispose { sceneView.onPause() }
     }
-    // 지도에서 받은 건물 (구역이 바뀔 때만 다시 만든다) 과, 같은 기준점에서 본 내 위치
-    val sceneBuildings = remember(buildings) {
-        buildings?.boxes?.map { Scene3DView.Building(it.id, it.east, it.north, it.width, it.depth, it.bearingDeg, it.height) }.orEmpty()
-    }
+    // 지도에서 받은 건물·도로·횡단보도와 같은 기준점에서 본 내 위치
     val ego = if (buildings != null && myFix != null) {
         Scene3DView.Ego(
             east = OsmBuildings.east(myFix.longitude, buildings.originLat, buildings.originLng),
@@ -187,7 +187,9 @@ fun BirdEyePanel(
             mySkin = mySkin,
             rearM = rearM,
             speedMps = myFix?.speedMps ?: 0f,
-            buildings = sceneBuildings,
+            city = buildings?.city,
+            roads = buildings?.roads.orEmpty(),
+            crossings = buildings?.crossings.orEmpty(),
             ego = ego,
         )
     }
@@ -198,7 +200,7 @@ fun BirdEyePanel(
             .background(RoadColors.Surface)
             .padding(16.dp)
     ) {
-        Text("내 주변 Car-ind CHAT 차량", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary)
+        Text("내 주변 Car-ind CHAT 차량 · ${cars.size}대", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = RoadColors.TextPrimary)
         Text(
             "받을 차를 누르고, 아래 버튼을 꾹 누른 채 말하세요",
             fontSize = 14.sp,
@@ -257,11 +259,12 @@ fun BirdEyePanel(
                     val clipped = car.forwardMeters != null && car.distanceMeters >= 0 &&
                         (abs(car.forwardMeters - f) > 0.5f || abs((car.lateralMeters ?: 0f) - l) > 0.5f)
                     val at = camera.project(l, 0f, -f + CAR_LENGTH_M / 2 + TAG_GAP_M) ?: return@forEach
+                    // 화면 밖에 있는 차는 이름표도 그리지 않는다 (뒤쪽 가장자리로 당겨 그린 차는 화면 안이라 그대로 나온다)
+                    if (at.first < 0f || at.first > size.width || at.second < 0f || at.second > size.height) return@forEach
                     val isSelected = car.plate == selectedPlate
-                    val distance = if (car.distanceMeters < 0) "거리 미확인" else "${car.distanceMeters}m"
                     drawTag(
                         textMeasurer,
-                        if (clipped) "${car.position.label} · $distance ${arrowFor(car)}" else "${car.position.label} · $distance",
+                        if (clipped) "${car.position.label} ${arrowFor(car)}" else car.position.label,
                         Offset(at.first, at.second),
                         if (isSelected) RoadColors.Accent else TAG_BACKGROUND,
                         Color.White,

@@ -14,7 +14,7 @@ import java.net.URLEncoder
 import kotlin.math.hypot
 
 /**
- * 내 위치 둘레의 건물을 지도(OpenStreetMap)에서 가져온다.
+ * 내 위치 둘레의 건물 · 도로 · 횡단보도를 지도(OpenStreetMap)에서 가져온다.
  *  1. 앱에 넣어 둔 구역(시연 위치 일대, assets/buildings_demo.json · tools/assets/fetch_buildings.py 가 만든다) 안이면 그 자료를 쓴다
  *  2. 그 밖이면 Overpass API 에서 반경 [RADIUS_M] 을 받고, 받은 곳에서 [REFETCH_M] 넘게 벗어나면 다시 받는다
  * 받지 못하면(인터넷 없음, 공개 서버가 바쁨) 건물 없이 도로만 보이고, 조금 뒤 다시 시도한다.
@@ -47,12 +47,13 @@ class BuildingsSource(private val scope: CoroutineScope, private val bundled: ()
                 if (packed != null && distance(lat, lng, packed) < bundledRadius - EDGE_M) {
                     cover = bundledRadius - EDGE_M
                     _area.value = packed
-                    Log.d(TAG, "buildings: ${packed.boxes.size} from the bundled area")
+                    Log.d(TAG, "map: ${packed.buildings.size} buildings, ${packed.roads.size} roads, ${packed.crossings.size} crossings from the bundled area")
                 } else {
-                    val boxes = OsmBuildings.parse(fetch(OsmBuildings.query(lat, lng, RADIUS_M)), lat, lng)
+                    val fetched = OsmBuildings.parseArea(fetch(OsmBuildings.query(lat, lng, RADIUS_M)), lat, lng)
+                    fetched.city          // 3D 모양은 여기(백그라운드)에서 미리 만들어 둔다
                     cover = REFETCH_M
-                    _area.value = OsmBuildings.Area(lat, lng, boxes)
-                    Log.d(TAG, "buildings: ${boxes.size} around $lat,$lng")
+                    _area.value = fetched
+                    Log.d(TAG, "map: ${fetched.buildings.size} buildings, ${fetched.roads.size} roads, ${fetched.crossings.size} crossings around $lat,$lng")
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "buildings unavailable: ${e.javaClass.simpleName} ${e.message}")
@@ -76,7 +77,7 @@ class BuildingsSource(private val scope: CoroutineScope, private val bundled: ()
                 val lat = origin.getDouble("lat")
                 val lng = origin.getDouble("lon")
                 bundledRadius = root.optDouble("radius", 0.0).toFloat()
-                bundledArea = OsmBuildings.Area(lat, lng, OsmBuildings.parse(json, lat, lng))
+                bundledArea = OsmBuildings.parseArea(json, lat, lng).also { it.city }
             } catch (e: Exception) {
                 Log.w(TAG, "bundled buildings unreadable: ${e.message}")
             }
