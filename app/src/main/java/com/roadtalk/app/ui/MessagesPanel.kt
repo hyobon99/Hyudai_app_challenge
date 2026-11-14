@@ -166,7 +166,7 @@ fun MessagesPanel(
                     )
                 }
                 Spacer(Modifier.height(4.dp))
-                Text("음성으로 말하면 이 6개 중 가장 가까운 말이 전송돼요", fontSize = 13.sp, color = MessageColors.Dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("차를 누른 채 끌거나 말하면 이 6개 중에서 전송돼요", fontSize = 13.sp, color = MessageColors.Dim, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     val slotWidth = maxWidth * 0.40f
                     val slotHeight = 74.dp

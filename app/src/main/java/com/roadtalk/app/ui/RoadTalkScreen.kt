@@ -7,6 +7,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +72,7 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     val backendName by vm.backendName.collectAsStateWithLifecycle()
     var editingPlate by remember { mutableStateOf(false) }
     var editingServer by remember { mutableStateOf(false) }
+    var choosingSetting by remember { mutableStateOf(false) }
 
     Box(
         Modifier
@@ -79,13 +82,10 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
     ) {
         Column(Modifier.fillMaxSize()) {
             TopBar(
-                myPlate = myPlate,
-                backend = backendName,
                 backendStatus = backendStatus,
                 vehicle = vehicle,
                 voice = voice,
-                onEditPlate = { editingPlate = true },
-                onEditServer = { editingServer = true },
+                onOpenSettings = { choosingSetting = true },
             )
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -103,6 +103,8 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                     buildings = buildings,
                     onSelectCar = vm::select,
                     onSelectDirection = vm::selectDirection,
+                    messageSlots = messageSlots,
+                    onSend = { plate, text -> vm.sendTo(plate, text) },
                     onTalk = vm::toggleTalking,
                     modifier = Modifier
                         .weight(0.42f)
@@ -171,6 +173,25 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
         }
     }
 
+    if (choosingSetting) {
+        // 앱 이름을 길게 누르면 뜬다: 내 차량번호 · 서버 주소 바꾸기 (화면에는 따로 표시하지 않는다)
+        AlertDialog(
+            onDismissRequest = { choosingSetting = false },
+            title = { Text("설정") },
+            text = {
+                Column {
+                    Text("내 차량번호: $myPlate", fontSize = 15.sp)
+                    Text("서버: $backendName", fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { choosingSetting = false; editingPlate = true }) { Text("차량번호 바꾸기") }
+            },
+            dismissButton = {
+                TextButton(onClick = { choosingSetting = false; editingServer = true }) { Text("서버 주소 바꾸기") }
+            },
+        )
+    }
     if (editingPlate) {
         PlateDialog(
             current = myPlate,
@@ -238,31 +259,24 @@ private fun PlateDialog(current: String, onSave: (String) -> Boolean, onDismiss:
     )
 }
 
+/**
+ * 맨 위 줄: 앱 이름과 SDK 연결 상태. 내 차량번호 · 서버 주소는 화면에 표시하지 않고, 앱 이름을 길게 누르면 바꾸는 창이 뜬다
+ */
 @Composable
 private fun TopBar(
-    myPlate: String,
-    backend: String,
     backendStatus: String?,
     vehicle: VehicleGateway.State,
     voice: VoiceGateway.State,
-    onEditPlate: () -> Unit,
-    onEditServer: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Text("Car-ind CHAT", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = RoadColors.TextPrimary)
-        Spacer(Modifier.width(20.dp))
-        Pill("내 차 $myPlate ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditPlate))
-        Spacer(Modifier.width(8.dp))
-        Pill("서버: $backend ✎", RoadColors.SurfaceHigh, Modifier.clickable(onClick = onEditServer))
-        Spacer(Modifier.width(8.dp))
-        val gearText = when (vehicle.gear) {
-            null -> "기어 정보 없음"
-            VehicleGear.GEAR_PARK -> "P 주차"
-            VehicleGear.GEAR_REVERSE -> "R 후진"
-            VehicleGear.GEAR_NEUTRAL -> "N 중립"
-            else -> "D 주행"
-        }
-        Pill(gearText, if (vehicle.isParked) RoadColors.AccentDim else RoadColors.SurfaceHigh)
+        Text(
+            "Car-ind CHAT",
+            fontSize = 28.sp,
+            fontWeight = FontWeight.Bold,
+            color = RoadColors.TextPrimary,
+            modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { onOpenSettings() }) },
+        )
         Spacer(Modifier.weight(1f))
         StatusDot("Vehicle", vehicle.connected)
         StatusDot("STT", voice.sttReady)

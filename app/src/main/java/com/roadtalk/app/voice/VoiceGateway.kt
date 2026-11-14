@@ -77,7 +77,11 @@ class VoiceGateway(context: Context) {
     }
 
     private val resultListener = object : ResultListener {
-        override fun onReady() = update { copy(listen = ListenState.PREPARING) }
+        override fun onReady() {
+            // 마이크가 준비됐다: '아무 말도 없으면 끝' 시간은 지금부터 센다 (준비에 몇 초씩 걸릴 때가 있다)
+            endpointer.begin(SystemClock.elapsedRealtime())
+            update { copy(listen = ListenState.PREPARING) }
+        }
         override fun onStartedRecognition() {
             endpointer.begin(SystemClock.elapsedRealtime())
             update { copy(listen = ListenState.LISTENING, partial = "") }
@@ -167,7 +171,8 @@ class VoiceGateway(context: Context) {
         if (_state.value.listen != ListenState.IDLE) return
         try {
             beginUtterance()
-            endpointer.begin(SystemClock.elapsedRealtime())
+            // 음성 인식이 준비될 때(onReady)까지는 '아무 말도 없음' 으로 끝내지 않는다. 준비 소식이 끝내 안 오면 그만큼 더 기다렸다가 끝낸다
+            endpointer.begin(SystemClock.elapsedRealtime() + READY_WAIT_MILLIS)
             update { copy(error = null, partial = "", listen = ListenState.PREPARING) }
             stt.request()
             session += 1
@@ -270,6 +275,8 @@ class VoiceGateway(context: Context) {
         const val PCM_CHUNK_BYTES = 3_200
         /** '인식 끝' 뒤에 최종 결과를 기다리는 시간 */
         const val FINAL_WAIT_MILLIS = 500L
+        /** request() 뒤에 음성 인식이 준비되기를 기다려 주는 시간 */
+        const val READY_WAIT_MILLIS = 15_000L
         /** stop() 뒤에 SDK 의 '인식 끝' 을 기다리는 시간 */
         const val STOP_GRACE_MILLIS = 1_500L
         /** 인식된 문장을 화면에 남겨 두는 시간 */

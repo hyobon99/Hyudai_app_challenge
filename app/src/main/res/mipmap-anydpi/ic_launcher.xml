@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 런처가 제 모양으로 잘라 쓰는 아이콘. 그림 전체가 한 장(ic_launcher_art)이라 배경에 넣고, 앞쪽 층은 비워 둔다 -->
+<!-- 런처가 제 모양으로 잘라 쓰는 아이콘. 그림 전체가 한 장(ic_launcher_art)이다.
+     Pleos 화면 아래쪽 바는 앞쪽 층만 그려서, 앞쪽 층에도 같은 그림을 넣는다 (비워 두면 바에 아무것도 안 보인다) -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@mipmap/ic_launcher_art" />
-    <foreground android:drawable="@android:color/transparent" />
+    <foreground android:drawable="@mipmap/ic_launcher_art" />
 </adaptive-icon>

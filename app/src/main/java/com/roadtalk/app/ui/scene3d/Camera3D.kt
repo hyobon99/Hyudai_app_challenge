@@ -92,6 +92,9 @@ class Camera3D(val width: Float, val height: Float, rearM: Float) {
     val viewProjection: FloatArray =
         Mat4.multiply(Mat4.perspective(FOV_Y, aspect, 1f, 600f * scale), Mat4.lookAt(eye, target))
 
+    /** 화면 맨 위 가운데에 보이는 도로가 내 차에서 앞으로 몇 m 인지 (지평선이 보이면 안개 끝) */
+    val frontM: Float get() = ground(width / 2f, 0f)?.first?.coerceAtMost(fogEnd) ?: fogEnd
+
     /** 3D 점이 화면 어디(px)에 그려지는지. 카메라 뒤쪽이면 null */
     fun project(x: Float, y: Float, z: Float): Pair<Float, Float>? {
         val m = viewProjection
@@ -120,8 +123,10 @@ class Camera3D(val width: Float, val height: Float, rearM: Float) {
 
     companion object {
         const val FOV_Y = 60f
-        private const val EYE_HEIGHT = 11f
-        private const val EYE_BACK = 14.35f
-        private const val LOOK_AHEAD = 3.25f
+        // 내 차 뒤 위에서 45도로 내려다본다 (처음에는 32도였다: 앞은 지평선까지 보이는데 뒤는 8.5m 라 앞뒤 차이가 너무 컸다).
+        // 화면 맨 아래가 내 차 뒤 8.5m, 맨 위가 앞 약 46m 가 되도록 맞춘 값
+        private const val EYE_HEIGHT = 15.71f
+        private const val EYE_BACK = 12.71f
+        private const val LOOK_AHEAD = 3f
     }
 }

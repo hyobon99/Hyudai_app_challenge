@@ -45,6 +45,35 @@ class LaneAndSpeechEndTest {
     }
 
     @Test
+    fun carsBesideMeAlwaysFitOnTheRoad() {
+        // 지도는 3차로, 내 자리는 맨 왼쪽 차로로 측정됐는데 내 왼쪽 차로에 차가 있다 → 나는 왼쪽에서 두 번째 차로여야 한다
+        val (lanes, low, high) = Lanes.fit(mapLanes = 3, first = 0, left = 1, right = 0, maxLanes = 10)
+        assertEquals(3, lanes)
+        val mine = Lanes.laneOf(0f, 3.5f, lanes, first = low, last = high)      // 측정만 보면 0번 차로
+        assertEquals(1, mine)
+        // 그러면 왼쪽 3.5m 의 차는 0번 차로 가운데에 놓인다 (길 안)
+        val centre = Lanes.roadCentreFor(mine, lanes)
+        assertTrue(Lanes.onRoad(-3.5f, 0f, centre, lanes))
+        assertEquals(0, Lanes.laneOf(-3.5f, centre, lanes))
+        // 양옆에 차가 있으면 가운데 차로
+        assertEquals(Triple(3, 1, 1), Lanes.fit(3, 0, 1, 1, 10))
+        // 지도의 차로 수로 모자라면 늘린다: 왼쪽 1 · 오른쪽 2 차로에 차가 있으면 4차로
+        assertEquals(Triple(4, 1, 1), Lanes.fit(3, 0, 1, 2, 10))
+        // 옆에 차가 없으면 지도 그대로
+        assertEquals(Triple(3, 0, 2), Lanes.fit(3, 0, 0, 0, 10))
+        // 양방향 4차로(중앙선 오른쪽 = 2번부터)에서 오른쪽에 차가 있으면 2번 차로
+        assertEquals(Triple(4, 2, 2), Lanes.fit(4, 2, 0, 1, 10))
+    }
+
+    @Test
+    fun onlyNearbyLanesCountAsBesideMe() {
+        assertEquals(-1, Lanes.beside(-3.3f))
+        assertEquals(0, Lanes.beside(1.2f))
+        assertEquals(2, Lanes.beside(7.4f))
+        assertNull("맞은편 차도처럼 먼 차는 내 길의 차로 보지 않는다", Lanes.beside(18f))
+    }
+
+    @Test
     fun laneDoesNotFlipNearTheLine() {
         // 가운데 차로에 있던 차가 차선(1.75)을 조금 넘어도 그대로, 0.5m 넘게 넘어가면 옆 차로
         assertEquals(1, Lanes.laneOf(2.0f, 0f, 3, previous = 1))

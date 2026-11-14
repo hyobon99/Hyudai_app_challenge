@@ -4,8 +4,10 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
+import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Shader
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.util.Log
@@ -51,6 +53,11 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         val crossings: List<OsmRoads.Spot> = emptyList(),
         val signals: List<OsmRoads.Spot> = emptyList(),
         val ego: Ego? = null,
+        /**
+         * 주변 차의 실제 좌우 위치 (차로에 맞추기 전 값): (오른쪽 m, 내 진행 방향 기준 각도 — 모르면 NaN) 가 차례로 들어 있다.
+         * 이 차들이 길 안에 그려지도록 내 차로와 차로 수를 정하는 데 쓴다
+         */
+        val neighbours: FloatArray = FloatArray(0),
     )
 
     @Volatile var frame = Frame()
@@ -109,6 +116,9 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private var myRoadKnown = false
         /** 내 차가 있는 차로 (왼쪽부터 0). 내 차는 언제나 이 차로의 가운데에 그린다 */
         private var myLane: Int? = null
+        /** 마지막으로 찾은 내 길의 지도상 차로 수와 일방통행 여부 (주변 차에 맞춰 차로를 늘리기 전 값) */
+        private var mapLanes = DEFAULT_LANES
+        private var mapOneway = true
 
         private var width = 1
         private var height = 1
@@ -191,7 +201,7 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
 
             // 내가 달리는 길의 차로 수와 자리를 지도에서 찾고, 지도의 다른 길과 횡단보도를 깐다
             val onMap = updateEgo(f, dt)
-            if (onMap) findMyRoad(f, dt)
+            if (onMap) findMyRoad(f, dt) else placeMyLane(f, dt, mapLanes, myDivider, mapOneway, null)
             laneCentre = myCenter
             laneCount = myLanes
             val lanesHalf = myLanes * LANE_M / 2
@@ -276,7 +286,7 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             }
             GLES20.glDisable(GLES20.GL_STENCIL_TEST)
 
-            // 선택한 차 아래의 파란 빛 고리
+            // 선택한 차(메시지를 받을 차) 아래의 네온 고리
             others.filter { it.first.selected }.forEach { (car, model) ->
                 val mesh = cars.getOrNull(car.type)
                 val w = (mesh?.halfX ?: 1f) * 2f + 2.2f
@@ -372,12 +382,38 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
                     }
                 }
             }
-            val road = best ?: return
-            val lanes = road.lanes.coerceIn(1, MAX_LANES)
-            val divider = if (road.oneway || lanes < 2) 0 else lanes / 2
-            // 내 차는 차선을 밟지 않고 차로 가운데로 달린다: 지도상의 내 자리와 가장 가까운 차로를 고르고
-            // (양방향 도로면 중앙선 오른쪽 차로 중에서), 그 차로의 가운데가 내 차 자리에 오도록 길을 옆으로 놓는다
-            val lane = Lanes.laneOf(0f, bestX, lanes, myLane.takeIf { myRoadKnown && lanes == myLanes }, first = divider)
+            val road = best
+            if (road == null) {
+                placeMyLane(f, dt, mapLanes, myDivider, mapOneway, null)
+                return
+            }
+            mapLanes = road.lanes.coerceIn(1, MAX_LANES)
+            mapOneway = road.oneway
+            placeMyLane(f, dt, mapLanes, if (road.oneway || mapLanes < 2) 0 else mapLanes / 2, road.oneway, bestX)
+        }
+
+        /**
+         * 내 차로를 정하고, 그 차로의 가운데가 내 차 자리에 오도록 길을 옆으로 놓는다 (내 차는 차선을 밟지 않고 차로 가운데로 달린다).
+         *  - 지도상의 내 자리(measuredCentre = 길 가운데가 내 차에서 오른쪽으로 몇 m)와 가장 가까운 차로를 고른다. 모르면 지금 차로를 유지한다
+         *  - 양방향 도로면 중앙선 오른쪽 차로 중에서 고른다
+         *  - 내 옆을 나란히 달리는 차가 길 밖(인도)에 그려지지 않게, 그 차들이 들어갈 차로가 남도록 고른다. 모자라면 차로를 늘린다 → [Lanes.fit]
+         */
+        private fun placeMyLane(f: Frame, dt: Float, baseLanes: Int, divider: Int, oneway: Boolean, measuredCentre: Float?) {
+            var left = 0
+            var right = 0
+            val beside = f.neighbours
+            for (i in 0 until beside.size / 2) {
+                val heading = beside[i * 2 + 1]
+                if (!heading.isNaN()) {
+                    val h = Math.toRadians(heading.toDouble())
+                    // 가로지르는 차, 일방통행 길에서 거꾸로 가는 차(맞은편 차도의 차)는 내 길의 차가 아니다
+                    if (abs(sin(h)) >= PARALLEL_SIN || (oneway && cos(h) < 0)) continue
+                }
+                val offset = Lanes.beside(beside[i * 2]) ?: continue
+                if (offset < 0) left = maxOf(left, -offset) else right = maxOf(right, offset)
+            }
+            val (lanes, low, high) = Lanes.fit(baseLanes, divider, left, right, MAX_LANES)
+            val lane = Lanes.laneOf(0f, measuredCentre ?: myCenter, lanes, myLane.takeIf { myRoadKnown && lanes == myLanes }, first = low, last = high)
             myLane = lane
             myLanes = lanes
             myDivider = divider
@@ -557,27 +593,39 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private fun skinTexture(skin: Int) = if (skins.isEmpty()) kit.white else skins[skin.mod(skins.size)]
 
         /** 선택한 차 아래에 까는 파란 빛 고리 (둥근 사각형 테두리 + 번짐) */
+        /** 받는 차 아래에 까는 고리: '음성으로 말하기' 버튼과 같은 네온 테두리 (하늘색 → 보라 → 분홍, 빛 번짐, 가운데 흰 줄) */
         private fun ringBitmap(): Bitmap {
-            val w = 128
-            val h = 224
+            val w = 256
+            val h = 448
             val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
-            val rect = RectF(26f, 26f, w - 26f, h - 26f)
-            val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE
-                strokeWidth = 16f
-                color = 0x993D8BFF.toInt()
-                maskFilter = BlurMaskFilter(12f, BlurMaskFilter.Blur.NORMAL)
+            val rect = RectF(52f, 52f, w - 52f, h - 52f)
+            val corner = 60f
+            val neon = LinearGradient(
+                rect.left, 0f, rect.right, 0f,
+                intArrayOf(0xFF4FD8FF.toInt(), 0xFFB06BFF.toInt(), 0xFFFF6BD6.toInt()), null, Shader.TileMode.CLAMP,
+            )
+            canvas.drawRoundRect(rect, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x40050810 })
+            // 빛 번짐: 같은 선을 굵고 옅게 여러 번
+            for ((width, alpha) in listOf(40f to 40, 26f to 60, 15f to 90)) {
+                canvas.drawRoundRect(rect, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = width
+                    shader = neon
+                    this.alpha = alpha
+                    maskFilter = BlurMaskFilter(width / 2.5f, BlurMaskFilter.Blur.NORMAL)
+                })
             }
-            val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            canvas.drawRoundRect(rect, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply {
                 style = Paint.Style.STROKE
-                strokeWidth = 5f
-                color = 0xFF6FAAFF.toInt()
-            }
-            val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x333D8BFF }
-            canvas.drawRoundRect(rect, 30f, 30f, fill)
-            canvas.drawRoundRect(rect, 30f, 30f, glow)
-            canvas.drawRoundRect(rect, 30f, 30f, line)
+                strokeWidth = 8f
+                shader = neon
+            })
+            canvas.drawRoundRect(rect, corner, corner, Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                strokeWidth = 2.5f
+                color = 0xC0FFFFFF.toInt()
+            })
             return bitmap
         }
 

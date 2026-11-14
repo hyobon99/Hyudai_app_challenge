@@ -17,18 +17,42 @@ object Lanes {
     private const val EDGE_M = 1.2f
     /** 길과 나란한지: 진행 방향이 약 25도 안 (같은 방향이든 맞은편이든) */
     private const val PARALLEL_SIN = 0.42f
+    /** 내 길의 차로 보는 좌우 범위 (차로 수) */
+    private const val BESIDE_LANES = 2
 
     /** 길 가운데가 roadCentre 에 있고 차로가 lanes 개일 때, index 번째 차로의 가운데 */
     fun centre(roadCentre: Float, lanes: Int, index: Int): Float = roadCentre + (index + 0.5f - lanes / 2f) * WIDTH_M
 
     /**
-     * lateral 자리의 차가 몇 번째 차로에 있는지 ([first] 번째부터 마지막 차로까지 중에서).
+     * lateral 자리의 차가 몇 번째 차로에 있는지 ([first] 번째부터 [last] 번째 차로까지 중에서).
      * previous = 지금까지 있던 차로. 그 차로에서 [STICKY_M] 넘게 벗어나지 않았으면 그대로 둔다.
      */
-    fun laneOf(lateral: Float, roadCentre: Float, lanes: Int, previous: Int? = null, first: Int = 0): Int {
+    fun laneOf(lateral: Float, roadCentre: Float, lanes: Int, previous: Int? = null, first: Int = 0, last: Int = lanes - 1): Int {
         val low = first.coerceIn(0, lanes - 1)
-        if (previous != null && previous in low until lanes && abs(lateral - centre(roadCentre, lanes, previous)) <= WIDTH_M / 2 + STICKY_M) return previous
-        return ((lateral - roadCentre) / WIDTH_M + lanes / 2f - 0.5f).roundToInt().coerceIn(low, lanes - 1)
+        val high = last.coerceIn(low, lanes - 1)
+        if (previous != null && previous in low..high && abs(lateral - centre(roadCentre, lanes, previous)) <= WIDTH_M / 2 + STICKY_M) return previous
+        return ((lateral - roadCentre) / WIDTH_M + lanes / 2f - 0.5f).roundToInt().coerceIn(low, high)
+    }
+
+    /**
+     * 내 옆을 나란히 달리는 차가 나보다 몇 차로 옆에 있는지 (왼쪽 −, 오른쪽 +, 같은 차로 0).
+     * [BESIDE_LANES] 차로보다 멀면 내 길의 차가 아닐 수 있어(맞은편 차도, 나란한 옆길) null
+     */
+    fun beside(lateral: Float): Int? = (lateral / WIDTH_M).roundToInt().takeIf { abs(it) <= BESIDE_LANES }
+
+    /**
+     * 주변 차가 길 밖(인도)에 그려지지 않게 내 차로의 범위를 정한다.
+     * 지도의 차로 수는 없거나 틀릴 수 있고, 내 차가 그중 어느 차로인지도 GPS 오차만큼 틀릴 수 있다.
+     * 반면 '내 왼쪽에 차가 있다' 는 것은 확실하므로, 내 왼쪽으로 [left] 차로 · 오른쪽으로 [right] 차로에 차가 있으면
+     * 내 차로는 왼쪽에서 [left] 번째 이상, 오른쪽 끝에서 [right] 번째 이하여야 한다. 지도의 차로 수로 모자라면 차로를 늘린다.
+     * first = 내가 달릴 수 있는 가장 왼쪽 차로 (양방향 도로의 중앙선 오른쪽 첫 차로).
+     * 돌려주는 값: (그릴 차로 수, 내 차로의 최소, 최대)
+     */
+    fun fit(mapLanes: Int, first: Int, left: Int, right: Int, maxLanes: Int): Triple<Int, Int, Int> {
+        val low = maxOf(first, left)
+        val lanes = maxOf(mapLanes, low + right + 1).coerceAtMost(maxLanes)
+        val high = (lanes - 1 - right).coerceAtLeast(0)
+        return Triple(lanes, low.coerceAtMost(high), high)
     }
 
     /** 내 차(좌우 0)가 lane 번째 차로의 가운데에 오려면 길 가운데가 있어야 하는 자리 */
