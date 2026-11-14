@@ -1,8 +1,6 @@
 package com.roadtalk.app.ui
 
 import android.util.Log
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -84,8 +82,7 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-/** 화면에 보이는 범위 (m). 내 차 주변을 크게 보도록 좁게 잡고, 앞쪽을 더 많이 보도록 내 차를 가운데보다 아래에 둔다 */
-private const val FRONT_M = 12f
+/** 화면 아래쪽에 보이는 뒤쪽 거리 (m). 내 차 주변을 크게 보도록 가깝게 잡는다. 카메라 거리는 이 값으로 고정이다 */
 private const val REAR_M = 7f
 private const val LANE_M = 3.5f
 private const val CAR_LENGTH_M = 4.6f
@@ -135,11 +132,10 @@ fun BirdEyePanel(
     val cars = rememberSmoothedCars(cars) { sceneView.laneCentre to sceneView.laneCount }
     // 위치가 계속 갱신돼도 탭 처리가 최신 위치를 보도록
     val currentCars by rememberUpdatedState(cars)
-    // 기본은 가깝게(뒤 7m 까지) 보여주고, 그보다 뒤에 있는 차가 있으면 그 차가 들어올 만큼만 카메라를 부드럽게 물린다
-    val rangeSteps = remember { RangeSteps() }
-    val (_, targetRear) = rangeSteps.update(cars)
-    val rearM by animateFloatAsState(targetRear, animationSpec = tween(600), label = "roadRear")
-    val currentRear by rememberUpdatedState(rearM)
+    // 카메라 거리는 언제나 같다 (내 차 뒤 7m 까지 보이는 가까운 뷰). 뒤쪽에 차가 있어도 카메라를 물리지 않고,
+    // 화면 아래로 벗어나는 뒤차는 화면 맨 아래에 걸쳐 그린다 → placement
+    val rearM = REAR_M
+    val currentRear = REAR_M
     var canvasOrigin by remember { mutableStateOf(Offset.Zero) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     // 시연 자동화(tools/scenario)가 '화면에서 그 차가 지금 어디 그려져 있는지' 알 수 있게 0.4초마다 로그로 남긴다
@@ -378,53 +374,20 @@ private const val UI_LOG_TAG = "RoadTalkUi"
 private const val SMOOTH_SECONDS = 0.1f
 /** 차로에 맞춰 그리는 차가 옆 차로 가운데로 옮겨 가는 빠르기 (차로 변경이 순간이동처럼 보이지 않게) */
 private const val LANE_CHANGE_SECONDS = 0.35f
-/** 화면을 넓히는 한계 (m). 이보다 먼 차는 가장자리에 흐리게 붙는다 */
-private const val MAX_FRONT_M = 30f
-private const val MAX_REAR_M = 22f
-/** 화면 범위를 넓히고 좁히는 단위 (앞 12 → 18 → 24 → 30m, 뒤 7 → 12 → 17 → 22m) */
-private const val FRONT_STEP_M = 6f
-private const val REAR_STEP_M = 5f
-private const val RANGE_SLACK_M = 2f
-
 /**
- * 근처 차가 모두 들어오도록 화면에 보이는 앞·뒤 범위 (m) 를 정한다. 기본 범위보다 좁아지지는 않는다.
- * 차가 조금 움직일 때마다 배율이 따라 바뀌면 화면 전체가 출렁여 보이므로, 범위는 몇 m 단계로만 바꾸고
- * 다시 좁힐 때는 여유([RANGE_SLACK_M])가 생긴 뒤에 좁힌다.
+ * 차를 그릴 (앞뒤, 좌우) m. 벡터를 모르면 칸의 대표 위치, 너무 멀면 보이는 범위 끝으로 당겨서.
+ * 화면은 내 차 뒤 [rearM] 까지만 보이므로, 그보다 뒤에 있는 차는 화면 맨 아래에 앞부분이 걸치도록 그린다
+ * (보이지 않으면 고를 수도, 그 차가 보낸 말풍선을 볼 수도 없다)
  */
-private class RangeSteps {
-    private var front = FRONT_M
-    private var rear = REAR_M
-
-    fun update(cars: List<NearbyCar>): Pair<Float, Float> {
-        var needFront = FRONT_M
-        var needRear = REAR_M
-        val margin = CAR_LENGTH_M * 0.9f
-        for (car in cars) {
-            val f = car.forwardMeters ?: continue
-            if (car.distanceMeters < 0) continue
-            if (f >= 0 && f + margin <= MAX_FRONT_M) needFront = maxOf(needFront, f + margin)
-            if (f < 0 && -f + margin <= MAX_REAR_M) needRear = maxOf(needRear, -f + margin)
-        }
-        front = step(front, needFront, FRONT_M, MAX_FRONT_M, FRONT_STEP_M)
-        rear = step(rear, needRear, REAR_M, MAX_REAR_M, REAR_STEP_M)
-        return front to rear
-    }
-
-    private fun step(current: Float, needed: Float, base: Float, max: Float, stepM: Float): Float {
-        var range = current
-        while (range < needed && range < max) range = (range + stepM).coerceAtMost(max)
-        while (range - stepM >= base && needed < range - stepM - RANGE_SLACK_M) range -= stepM
-        return range
-    }
-}
-
-/** 차를 그릴 (앞뒤, 좌우) m. 벡터를 모르면 칸의 대표 위치, 너무 멀면 보이는 범위 끝으로 당겨서 */
 private fun placement(car: NearbyCar, rearM: Float): Pair<Float, Float> {
     val f = car.forwardMeters
     val l = car.lateralMeters
     val (forward, lateral) = if (f != null && l != null && car.distanceMeters >= 0) f to l else nominal(car.position)
-    return forward.coerceIn(-(rearM - CAR_LENGTH_M * 0.5f), MAX_SHOWN_FRONT_M) to lateral.coerceIn(-MAX_SHOWN_SIDE_M, MAX_SHOWN_SIDE_M)
+    return forward.coerceIn(-(rearM - REAR_EDGE_M), MAX_SHOWN_FRONT_M) to lateral.coerceIn(-MAX_SHOWN_SIDE_M, MAX_SHOWN_SIDE_M)
 }
+
+/** 화면 아래로 벗어나는 뒤차를 화면 끝에서 이만큼 안쪽에 그린다 (m) */
+private const val REAR_EDGE_M = 1f
 
 private fun nominal(position: RelativePosition): Pair<Float, Float> = when (position) {
     RelativePosition.FRONT -> 7.5f to 0f
