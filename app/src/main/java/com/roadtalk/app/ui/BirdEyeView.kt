@@ -311,18 +311,16 @@ fun BirdEyePanel(
                 // 차를 누른 채 끄는 동안: 방향 메뉴
                 drag?.let { drawRadialMenu(it, messageSlots, textMeasurer) }
             }
-            // 전송 실패: 도로 화면 한가운데에 말하기 버튼과 같은 네온 상자로 알린다 (욕설·보낼 수 없는 말·받을 차 없음)
+            // 전송 실패: 도로 화면 한가운데에 말하기 버튼과 같은 네온 상자로 알린다 (욕설·보낼 수 없는 말·받을 차 없음). 상자는 글자에 맞춘 크기
             if (sendFailed) {
                 Box(
                     Modifier
                         .align(Alignment.Center)
-                        .fillMaxWidth()
-                        .height(TALK_BUTTON_HEIGHT_DP.dp)
-                        .padding(8.dp)
-                        .neonBox(radius = 26.dp, strength = 2.2f),
+                        .neonBox(radius = 20.dp, strength = 2.2f)
+                        .padding(horizontal = 26.dp, vertical = 16.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("전송에 실패했습니다", style = Neon.text(34, strong = true), maxLines = 1)
+                    Text("전송에 실패했습니다", style = Neon.text(26, strong = true), maxLines = 1)
                 }
             }
             // 오른쪽 위의 작은 동그란 버튼: 내 차 고르기, 메시지 함 (누르면 오른쪽 지도 자리에 그 화면이 뜬다)
