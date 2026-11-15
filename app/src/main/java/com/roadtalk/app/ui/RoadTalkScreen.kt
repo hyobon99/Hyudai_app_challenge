@@ -244,7 +244,7 @@ private fun PlateDialog(current: String, onSave: (String) -> Boolean, onDismiss:
 }
 
 /**
- * 맨 위 줄: 앱 이름과 SDK 연결 상태. 내 차량번호 · 서버 주소는 화면에 표시하지 않고, 앱 이름을 길게 누르면 바꾸는 창이 뜬다
+ * 맨 위 줄: 앱 이름만. SDK 연결에 문제가 있을 때만 그 아래에 한 줄로 알린다. 내 차량번호 · 서버 주소는 화면에 표시하지 않고, 앱 이름을 길게 누르면 바꾸는 창이 뜬다
  */
 @Composable
 private fun TopBar(
@@ -261,10 +261,6 @@ private fun TopBar(
             color = RoadColors.TextPrimary,
             modifier = Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { onOpenSettings() }) },
         )
-        Spacer(Modifier.weight(1f))
-        StatusDot("Vehicle", vehicle.connected)
-        StatusDot("STT", voice.sttReady)
-        StatusDot("TTS", voice.ttsReady)
     }
     val errors = listOfNotNull(backendStatus, vehicle.lastError, voice.error)
     if (errors.isNotEmpty()) {
@@ -290,18 +286,4 @@ private fun Pill(text: String, color: Color, modifier: Modifier = Modifier) {
             .background(color)
             .padding(horizontal = 14.dp, vertical = 8.dp),
     )
-}
-
-@Composable
-private fun StatusDot(label: String, ok: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 6.dp)) {
-        Box(
-            Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(if (ok) RoadColors.Ok else RoadColors.Error)
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(label, fontSize = 14.sp, color = RoadColors.TextSecondary)
-    }
 }
