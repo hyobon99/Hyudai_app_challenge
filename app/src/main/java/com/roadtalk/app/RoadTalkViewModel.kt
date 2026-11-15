@@ -17,6 +17,7 @@ import com.roadtalk.app.net.ServerStore
 import com.roadtalk.app.map.BuildingsSource
 import com.roadtalk.app.net.Perception
 import com.roadtalk.app.map.OsmBuildings
+import com.roadtalk.app.net.Geo
 import com.roadtalk.app.map.OsmRoads
 import com.roadtalk.app.ui.scene3d.CarLook
 import com.roadtalk.app.vehicle.PlateStore
@@ -113,20 +114,25 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
 
     /**
      * 내 위치와 방향. 앱을 켠 뒤 한 번도 움직이지 않아 방향을 모를 때는, 지도에서 가장 가까운 도로가 뻗은 방향을 내 방향으로 본다
-     * (북쪽을 본다고 치면 실제 길과 어긋나서 도로와 횡단보도가 비스듬히 그려진다). 움직이기 시작하면 실제 이동 방향을 쓴다.
+     * (북쪽을 본다고 치면 실제 길과 어긋나서 도로와 횡단보도가 비스듬히 그려진다).
+     * 움직이는 동안에는 이동 방향을 쓰되, 지금 달리는 길과 비슷한 방향이면 그 길의 방향에 맞춘다 → [OsmRoads.alignedHeading]
      */
     val myLocation: StateFlow<LocationGateway.Fix?> =
         combine(location.location, buildings) { fix, area -> alongNearestRoad(fix, area) }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private fun alongNearestRoad(fix: LocationGateway.Fix?, area: OsmBuildings.Area?): LocationGateway.Fix? {
-        if (fix == null || fix.headingKnown || area == null) return fix
-        val bearing = OsmRoads.bearingAt(
-            OsmBuildings.east(fix.longitude, area.originLat, area.originLng),
-            OsmBuildings.north(fix.latitude, area.originLat),
-            area.roads,
-        ) ?: return fix
-        return fix.copy(heading = bearing)
+        if (fix == null || area == null) return fix
+        val east = OsmBuildings.east(fix.longitude, area.originLat, area.originLng)
+        val north = OsmBuildings.north(fix.latitude, area.originLat)
+        if (!fix.headingKnown) {
+            // 아직 한 번도 움직이지 않았다: 가장 가까운 도로가 뻗은 방향
+            val bearing = OsmRoads.bearingAt(east, north, area.roads) ?: return fix
+            return fix.copy(heading = bearing)
+        }
+        // 달리는 중: 차로를 바꾸거나 옆으로 비켜 줄 때 이동 방향이 틀어져도, 달리는 길의 방향을 내 방향으로 쓴다
+        val aligned = OsmRoads.alignedHeading(fix.heading, east, north, area.roads)
+        return if (aligned == fix.heading) fix else fix.copy(heading = aligned)
     }
 
     /** 지도에 지금 보이는 범위 (내 위치에서 지도 구석까지, m). 이 안의 차를 모두 찾도록 검색 반경으로 쓴다 */
@@ -187,9 +193,8 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             nearbyCars.collect { cars ->
-                if (_selectedPlate.value == null || cars.none { it.plate == _selectedPlate.value }) {
-                    _selectedPlate.value = cars.firstOrNull()?.plate
-                }
+                // 받는 차는 운전자가 직접 고를 때만 선택된다 (알아서 골라 두지 않는다). 고른 차가 범위 밖으로 나가면 선택을 푼다
+                if (_selectedPlate.value != null && cars.none { it.plate == _selectedPlate.value }) _selectedPlate.value = null
             }
         }
     }
@@ -273,14 +278,27 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         else SimulatedRoadTalkRepository()
     }
 
+    /**
+     * 차를 눌러 받는 차로 고른다 (차 아래 네온 고리). 말할 때 대상을 말하지 않으면 이 차에게 간다.
+     * 고른 차를 한 번 더 누르면 선택이 풀린다. 메시지를 보내고 나면 풀리고, 보내지 않아도 [SELECTION_SECONDS] 초 뒤에 풀린다
+     */
     fun select(plate: String) {
+        setSelected(if (_selectedPlate.value == plate) null else plate)
+    }
+
+    private fun setSelected(plate: String?) {
         _selectedPlate.value = plate
+        if (plate == null) return
+        viewModelScope.launch {
+            delay(SELECTION_SECONDS * 1000L)
+            if (_selectedPlate.value == plate) _selectedPlate.value = null
+        }
     }
 
     /** 빈 도로를 누르면 그 방향에서 가장 가까운 차를 받는 사람으로. 그 방향에 차가 없으면 아무 일도 없다 (안내 문구도 띄우지 않는다) */
     fun selectDirection(position: RelativePosition) {
         val car = nearbyCars.value.filter { it.position == position }.minByOrNull { it.distanceMeters } ?: return
-        _selectedPlate.value = car.plate
+        setSelected(car.plate)
     }
 
     /** 지도에서 고른 위치로 순정 내비에 경로 안내를 요청한다 */
@@ -293,10 +311,11 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         if (navi.cancelRoute()) showNotice("경로 안내 종료를 요청했어요.")
     }
 
-    /** 정해진 메시지를 그 차에게 보낸다 (음성 명령으로 고른 것) */
+    /** 정해진 메시지를 그 차에게 보낸다 (음성 명령으로 고르거나, 차를 끌어서 고른 것). 보내고 나면 아무 차도 선택돼 있지 않다 */
     fun sendTo(plate: String, text: String): Boolean {
-        _selectedPlate.value = plate
-        return send(plate, text)
+        val sent = send(plate, text)
+        if (sent) _selectedPlate.value = null
+        return sent
     }
 
     /**
@@ -340,7 +359,8 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
     private fun onVoiceResult(spoken: String) {
         viewModelScope.launch {
             val cars = nearbyCars.value
-            val selectedPlate = _selectedPlate.value
+            // 대상을 말하지 않았을 때 받을 차: 눌러서 골라 둔 차, 없으면 가장 가까운 차
+            val selectedPlate = _selectedPlate.value ?: cars.filter { it.distanceMeters >= 0 }.minByOrNull { it.distanceMeters }?.plate
             val selected = cars.firstOrNull { it.plate == selectedPlate }
             val hasProfanity = filter.check(spoken).hasProfanity
             // 음성으로는 메시지 목록 전체(23개) 중에서 고른다. 기본 메시지 함의 6개는 차를 끌어서 보낼 때 쓰는 것
@@ -387,6 +407,8 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
             peerPosition = positionOf(toPlate),
         )
         _messages.value = _messages.value + message
+        // 그 차가 보낸 말풍선이 아직 떠 있으면 내린다 (같은 차 위에는 말풍선이 하나만 뜨므로, 내가 방금 보낸 말이 보여야 한다)
+        if (_banner.value?.let { Geo.plateKey(it.fromPlate) == Geo.plateKey(toPlate) } == true) _banner.value = null
         _sent.value = message
         viewModelScope.launch {
             delay(3_500)
@@ -460,8 +482,10 @@ class RoadTalkViewModel(app: Application) : AndroidViewModel(app) {
         /** 받은 메시지를 읽어 주기 전에 '띵' 소리가 먼저 들리도록 두는 틈 */
         const val DING_BEFORE_SPEECH_MILLIS = 450L
         /** 전송에 실패했을 때 화면에 띄우고 읽어 주는 말, 화면에 띄워 두는 시간 */
+/** 눌러서 고른 받는 차가 선택된 채로 남아 있는 시간 (초). 그 안에 보내지 않으면 선택이 풀린다 */
+        const val SELECTION_SECONDS = 10
         const val SEND_FAILED_TEXT = "전송에 실패했습니다"
-        const val SEND_FAILED_SHOW_MILLIS = 3_000L
+        const val SEND_FAILED_SHOW_MILLIS = 5_000L
         const val MIN_SEARCH_RADIUS_M = 300
         const val MAX_SEARCH_RADIUS_M = 3000
         const val FALLBACK_PLATE = "99허 0000"

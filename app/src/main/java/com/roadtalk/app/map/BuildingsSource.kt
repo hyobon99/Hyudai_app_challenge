@@ -108,7 +108,7 @@ class BuildingsSource(private val scope: CoroutineScope, private val bundled: ()
         const val RADIUS_M = 320
         const val REFETCH_M = 150f
         /** 구역 가장자리에서 이만큼 안쪽까지만 그 구역을 쓴다 (앞쪽 건물이 비어 보이지 않게) */
-        const val EDGE_M = 170f
+        const val EDGE_M = 60f
         const val RETRY_MILLIS = 30_000L
     }
 }

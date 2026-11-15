@@ -41,13 +41,23 @@ object RoadRoute {
 
     /**
      * 길을 찾는다 (네트워크를 쓰므로 화면 스레드에서 부르지 말 것). 못 찾으면 null.
-     * 서버에는 출발 · 도착 좌표만 보낸다 (차량번호 같은 정보는 보내지 않는다)
+     * 서버에는 출발 · 도착 좌표와 지금 가는 방향만 보낸다 (차량번호 같은 정보는 보내지 않는다).
+     * headingDeg = 내가 가는 방향 (0 북, 90 동). 알려 주면 그 방향으로 출발하는 길을 찾는다 (뒤로 돌아 나가는 길을 고르지 않게).
+     * 그 방향으로 가는 길이 없다고 하면 방향 없이 다시 찾는다
      */
-    fun fetch(fromLatitude: Double, fromLongitude: Double, toLatitude: Double, toLongitude: Double): List<Point>? {
+    fun fetch(fromLatitude: Double, fromLongitude: Double, toLatitude: Double, toLongitude: Double, headingDeg: Float? = null): List<Point>? {
+        if (headingDeg != null) {
+            val bearing = ((headingDeg % 360f + 360f) % 360f).toInt()
+            request(fromLatitude, fromLongitude, toLatitude, toLongitude, "&bearings=$bearing,$BEARING_RANGE_DEG%3B")?.let { return it }
+        }
+        return request(fromLatitude, fromLongitude, toLatitude, toLongitude, "")
+    }
+
+    private fun request(fromLatitude: Double, fromLongitude: Double, toLatitude: Double, toLongitude: Double, extra: String): List<Point>? {
         val url = String.format(
             Locale.US, "%s/%.6f,%.6f;%.6f,%.6f?overview=full&geometries=polyline&steps=false",
             ENDPOINT, fromLongitude, fromLatitude, toLongitude, toLatitude,
-        )
+        ) + extra
         return try {
             val connection = URL(url).openConnection() as HttpURLConnection
             try {
@@ -77,6 +87,34 @@ object RoadRoute {
         val encoded = GEOMETRY.find(json)?.groupValues?.get(1) ?: return null
         // JSON 문자열 안에서 \ 는 \\ 로 적혀 있다
         return decodePolyline(encoded.replace("\\\\", "\\")).takeIf { it.size >= 2 }
+    }
+
+    /**
+     * 내가 경로와 반대쪽으로 가고 있는지: 경로를 따라 [AHEAD_M] 앞에 있는 자리가 내 진행 방향(headingDeg)에서 [AGAINST_DEG] 도 넘게 벗어나 있다
+     * (뒤쪽이나 옆 뒤쪽에 있다). 그러면 지금 가는 방향으로 길을 다시 찾아야 한다
+     */
+    fun against(route: List<Point>, latitude: Double, longitude: Double, headingDeg: Float): Boolean {
+        val start = nearest(route, latitude, longitude)?.first ?: return false
+        val mPerLat = 111_320.0
+        val mPerLng = 111_320.0 * cos(Math.toRadians(latitude))
+        // 경로를 따라 start 다음 점부터 걸어가며 AHEAD_M 앞의 자리를 찾는다 (내 자리 기준 동·북 m)
+        var x = (route[start + 1].longitude - longitude) * mPerLng
+        var y = (route[start + 1].latitude - latitude) * mPerLat
+        var walked = hypot(x, y)
+        var i = start + 1
+        while (walked < AHEAD_M && i < route.size - 1) {
+            val nx = (route[i + 1].longitude - longitude) * mPerLng
+            val ny = (route[i + 1].latitude - latitude) * mPerLat
+            walked += hypot(nx - x, ny - y)
+            x = nx
+            y = ny
+            i++
+        }
+        if (hypot(x, y) < AHEAD_MIN_M) return false       // 거의 다 왔거나 그 자리 위에 있다
+        var diff = (Math.toDegrees(atan2(x, y)) - headingDeg) % 360.0
+        if (diff > 180.0) diff -= 360.0
+        if (diff < -180.0) diff += 360.0
+        return abs(diff) > AGAINST_DEG
     }
 
     /** 서버의 답에서 그 길을 가는 데 걸리는 시간(초)을 꺼낸다 */
@@ -201,11 +239,16 @@ object RoadRoute {
     private val GEOMETRY = Regex("\"geometry\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
     private val DURATION = Regex("\"duration\"\\s*:\\s*([0-9.]+)")
     /** 경로의 선이 이만큼(도) 넘게 꺾이면 회전, 이만큼 넘으면 유턴으로 본다. 앞뒤 이 거리(m)의 방향을 견준다 */
+    private const val AGAINST_DEG = 100.0
+    private const val AHEAD_M = 25.0
+    private const val AHEAD_MIN_M = 8.0
     private const val TURN_DEG = 40.0
     private const val UTURN_DEG = 150.0
     private const val TURN_SPAN_M = 12.0
     /** 걸리는 시간을 모를 때 어림하는 빠르기 (m/s, 시속 약 25km) */
     private const val DEFAULT_MPS = 7.0
+    /** 출발 방향을 알려 줄 때 허용하는 좌우 범위 (도) */
+    private const val BEARING_RANGE_DEG = 60
     private const val ENDPOINT = "https://router.project-osrm.org/route/v1/driving"
     private const val TIMEOUT_MS = 8000
     private const val TAG = "RoadTalkRoute"

@@ -69,4 +69,20 @@ class RoadRouteTest {
         assertNull(RoadRoute.progress(emptyList(), 37.5, 127.0))
         assertEquals(123.4, RoadRoute.parseSeconds("""{"code":"Ok","routes":[{"legs":[{"duration":123.4,"distance":900}],"duration":123.4}]}""")!!, 0.01)
     }
+
+    @Test
+    fun noticesWhenIAmDrivingAwayFromTheRoute() {
+        // 북쪽으로 뻗은 길
+        val route = listOf(RoadRoute.Point(37.500, 127.000), RoadRoute.Point(37.501, 127.000), RoadRoute.Point(37.502, 127.000))
+        // 북쪽으로 가는 중이면 맞는 방향, 남쪽으로 가는 중이면 반대 방향
+        assertTrue(!RoadRoute.against(route, 37.5005, 127.000, 5f))
+        assertTrue(RoadRoute.against(route, 37.5005, 127.000, 185f))
+        // 옆으로 조금 틀어져 가는 것(차로 변경)은 반대 방향이 아니다
+        assertTrue(!RoadRoute.against(route, 37.5005, 127.000, 40f))
+        // 경로가 내 뒤 옆으로 꺾여 나간다: 북쪽으로 가는데 경로는 남동쪽 옆길로 이어진다
+        val side = listOf(RoadRoute.Point(37.5000, 127.0000), RoadRoute.Point(37.4998, 127.0006), RoadRoute.Point(37.5010, 127.0012))
+        assertTrue(RoadRoute.against(side, 37.5002, 127.0000, 0f))
+        // 거의 다 왔으면 따지지 않는다
+        assertTrue(!RoadRoute.against(route, 37.50198, 127.000, 185f))
+    }
 }

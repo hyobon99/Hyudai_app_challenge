@@ -105,36 +105,37 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                         .weight(0.42f)
                         .fillMaxHeight(),
                 )
-                if (garageOpen) {
-                    GaragePanel(
-                        myType = myCarType,
-                        mySkin = mySkin,
-                        onPickType = vm::setMyCarType,
-                        onPickSkin = vm::setMySkin,
-                        onClose = vm::closeGarage,
-                        modifier = Modifier
-                            .weight(0.58f)
-                            .fillMaxHeight(),
-                    )
-                } else if (messagesOpen) {
-                    MessagesPanel(
-                        slots = messageSlots,
-                        onAssign = vm::setMessageSlot,
-                        onClose = vm::closeMessages,
-                        modifier = Modifier
-                            .weight(0.58f)
-                            .fillMaxHeight(),
-                    )
-                } else {
+                // 오른쪽: 지도는 늘 떠 있고, 내 차 고르기 · 메시지 함은 그 위에 덮어 띄운다
+                // (지도를 치웠다가 다시 띄우면 지도 그림을 처음부터 다시 받아 몇 초 동안 빈 화면이 보인다)
+                Box(
+                    Modifier
+                        .weight(0.58f)
+                        .fillMaxHeight()
+                ) {
                     NavPanel(
                         myFix = myLocation,
                         navi = navi,
                         onRequestRoute = vm::startRouteTo,
                         onCancelRoute = vm::cancelRoute,
-                        modifier = Modifier
-                            .weight(0.58f)
-                            .fillMaxHeight(),
+                        modifier = Modifier.fillMaxSize(),
                     )
+                    if (garageOpen) {
+                        GaragePanel(
+                            myType = myCarType,
+                            mySkin = mySkin,
+                            onPickType = vm::setMyCarType,
+                            onPickSkin = vm::setMySkin,
+                            onClose = vm::closeGarage,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    } else if (messagesOpen) {
+                        MessagesPanel(
+                            slots = messageSlots,
+                            onAssign = vm::setMessageSlot,
+                            onClose = vm::closeMessages,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
         }

@@ -123,9 +123,13 @@ internal class CarTracker {
             val lateral = (de * cosH - dn * sinH).toFloat()
             val cell = steadyCell(t.cell, forward, lateral)
             t.cell = cell
+            val theirHeading = heading(t, nowMillis)
             NearbyCar(
                 key, t.plate, MODEL, hypot(de, dn).toInt(), cell, forward, lateral,
-                heading(t, nowMillis)?.let { normalizeDeg(it - myHeading) },
+                theirHeading?.let { normalizeDeg(it - myHeading) },
+                latitude = originLat + north / METERS_PER_DEG,
+                longitude = originLng + east / (METERS_PER_DEG * cos(Math.toRadians(originLat))),
+                headingDeg = theirHeading,
             )
         }.sortedBy { it.distanceMeters }
     }

@@ -129,15 +129,21 @@ fun NavPanel(
         while (true) {
             val fix = currentFix
             if (fix != null) {
-                val away = RoadRoute.nearest(route, fix.latitude, fix.longitude)?.second
-                if (away == null || away > OFF_ROUTE_M) {
+                val near = RoadRoute.nearest(route, fix.latitude, fix.longitude)
+                val away = near?.second
+                // 달리는 중인데 경로가 내 뒤쪽으로 뻗어 있다 (길을 지나쳤거나, 처음 찾을 때 방향을 몰랐다)
+                // (위치가 한 번에 멀리 튄 직후에는 속도와 방향이 엉터리라 믿지 않는다)
+                val speed = fix.speedMps ?: 0f
+                val heading = fix.heading.takeIf { fix.headingKnown && speed in 1f..MAX_TRUSTED_MPS }
+                val wrongWay = near != null && heading != null && RoadRoute.against(route, fix.latitude, fix.longitude, heading)
+                if (away == null || away > OFF_ROUTE_M || wrongWay) {
                     val found = withContext(Dispatchers.IO) {
-                        RoadRoute.fetch(fix.latitude, fix.longitude, destinationLatitude, destinationLongitude)
+                        RoadRoute.fetch(fix.latitude, fix.longitude, destinationLatitude, destinationLongitude, heading ?: fix.heading.takeIf { fix.headingKnown && speed <= MAX_TRUSTED_MPS })
                     }
                     if (found != null) route = found
                     routeFailed = found == null && route.isEmpty()
                     // 길 찾기 서버에 너무 자주 묻지 않는다
-                    delay(ROUTE_ASK_AGAIN_MS)
+                    delay(if (found != null) ROUTE_ASK_AGAIN_MS else ROUTE_RETRY_MS)
                 }
             }
             delay(ROUTE_CHECK_MS)
@@ -281,10 +287,14 @@ private fun RoadRoute.Progress.toTurn(): NaviGateway.Turn {
 }
 
 /** 경로에서 이만큼(m) 넘게 벗어나면 지금 위치에서 길을 다시 찾는다 */
-private const val OFF_ROUTE_M = 60.0
+private const val OFF_ROUTE_M = 30.0
+/** 이보다 빠르게 움직인 것으로 계산되면 위치가 튄 것으로 보고, 그때의 진행 방향은 쓰지 않는다 (m/s, 시속 약 200km) */
+private const val MAX_TRUSTED_MPS = 55f
 /** 경로에서 벗어났는지 살피는 간격, 한 번 물어본 뒤 다시 물을 수 있을 때까지의 시간 (ms) */
 private const val ROUTE_CHECK_MS = 2000L
-private const val ROUTE_ASK_AGAIN_MS = 15000L
+private const val ROUTE_ASK_AGAIN_MS = 5000L
+/** 길을 받지 못했을 때 다시 물을 때까지의 시간 (ms) */
+private const val ROUTE_RETRY_MS = 15000L
 
 /** 지도 위 흰 카드 색 (지도가 밝아서 패널 안에서는 어두운 글자를 쓴다) */
 private object NavColors {

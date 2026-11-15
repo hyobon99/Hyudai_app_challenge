@@ -43,6 +43,14 @@ data class NearbyCar(
     val skin: Int? = null,
     /** 그 차 운전자가 고른 차종 (0~9). 고르지 않았으면 null → 차량번호로 정한다 */
     val carType: Int? = null,
+    /**
+     * 그 차의 지도상 위치와 방위 (0 북, 90 동). 모르면 null.
+     * 차선 없는 골목에서는 이 값으로 차를 지도(도로)에 맞춰 그린다: 상대 위치(forward · lateral)는 내 위치가 보정될 때마다
+     * 주변 차 전체가 한꺼번에 흔들리지만, 지도에 맞춰 그리면 길가에 세워 둔 차가 도로와 함께 제자리에 있다
+     */
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val headingDeg: Float? = null,
 )
 
 /**

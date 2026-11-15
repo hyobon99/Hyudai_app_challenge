@@ -14,7 +14,9 @@ object Lanes {
     /** 옆 차로로 넘어갔다고 보려면 차로 경계를 이만큼 더 넘어가야 한다 (m). 경계 근처에서 왔다 갔다 하지 않게 */
     private const val STICKY_M = 0.5f
     /** 길 가장자리에서 이만큼 벗어난 차까지는 길 위의 차로 본다 (m) */
-    private const val EDGE_M = 1.2f
+    private const val EDGE_M = 3.5f
+    /** 앞뒤로 1m 멀어질 때마다 더 주는 여유 (m) */
+    private const val EDGE_PER_M = 0.06f
     /** 길과 나란한지: 진행 방향이 약 25도 안 (같은 방향이든 맞은편이든) */
     private const val PARALLEL_SIN = 0.42f
     /** 내 길의 차로 보는 좌우 범위 (차로 수) */
@@ -49,18 +51,26 @@ object Lanes {
      * 돌려주는 값: (그릴 차로 수, 내 차로의 최소, 최대)
      */
     fun fit(mapLanes: Int, first: Int, left: Int, right: Int, maxLanes: Int): Triple<Int, Int, Int> {
-        val low = maxOf(first, left)
-        val lanes = maxOf(mapLanes, low + right + 1).coerceAtMost(maxLanes)
+        val wanted = maxOf(first, left) + right + 1
+        // 지도보다 늘리는 것은 한 차로까지만. 차가 비스듬히 움직일 때(비켜 주기, 차로 변경)는 방향이 틀어져
+        // 옆 차가 두세 차로 옆에 있는 것처럼 계산될 수 있는데, 그때마다 길이 넓어졌다 좁아졌다 하지 않게 한다
+        val lanes = maxOf(mapLanes, wanted.coerceAtMost(mapLanes + 1)).coerceAtMost(maxLanes)
         val high = (lanes - 1 - right).coerceAtLeast(0)
-        return Triple(lanes, low.coerceAtMost(high), high)
+        val low = maxOf(first, left).coerceAtMost(lanes - 1)
+        return Triple(lanes, low.coerceAtMost(maxOf(high, low)), maxOf(high, low))
     }
 
     /** 내 차(좌우 0)가 lane 번째 차로의 가운데에 오려면 길 가운데가 있어야 하는 자리 */
     fun roadCentreFor(lane: Int, lanes: Int): Float = (lanes / 2f - 0.5f - lane) * WIDTH_M
 
-    /** 이 차를 차로에 맞춰 그릴지: 내 길과 나란히 달리고(방향을 모르면 나란한 것으로 본다), 내 길의 폭 안에 있다 */
-    fun onRoad(lateral: Float, relativeHeadingDeg: Float?, roadCentre: Float, lanes: Int): Boolean {
+    /**
+     * 이 차를 차로에 맞춰 그릴지: 내 길과 나란히 달리고(방향을 모르면 나란한 것으로 본다), 내 길 위나 바로 곁에 있다.
+     * 길 가장자리에서 조금 벗어나게 계산된 차는 가장 바깥 차로에 그린다 (인도 위를 달리는 것처럼 보이지 않게).
+     * 멀리 있는 차일수록 좌우 위치가 크게 틀릴 수 있어서(방향이 2도만 틀려도 50m 앞에서는 1.7m) forward 에 따라 여유를 더 준다
+     */
+    fun onRoad(lateral: Float, relativeHeadingDeg: Float?, roadCentre: Float, lanes: Int, forward: Float = 0f): Boolean {
         if (relativeHeadingDeg != null && abs(sin(Math.toRadians(relativeHeadingDeg.toDouble()))) >= PARALLEL_SIN) return false
-        return abs(lateral - roadCentre) <= lanes * WIDTH_M / 2 + EDGE_M
+        val edge = EDGE_M + abs(forward).coerceAtMost(100f) * EDGE_PER_M
+        return abs(lateral - roadCentre) <= lanes * WIDTH_M / 2 + edge
     }
 }

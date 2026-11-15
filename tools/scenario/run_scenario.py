@@ -205,23 +205,24 @@ def cell_name(forward, lateral):
 BLUE, AMBER, TEAL, GREY, DARK = (61, 139, 255), (255, 170, 60), (64, 200, 170), (130, 138, 152), (92, 98, 112)
 
 
-def scenario_merge(dev_a, dev_b):
-    """끼어들기: 공사 구간을 코앞에 두고 B 가 A 바로 앞으로 급하게 들어오고, A 는 급브레이크로 자리를 내준 뒤 인사를 주고받는다"""
+def scenario_merge(dev_a, dev_b, pace=1.0):
+    """끼어들기: 공사 구간을 코앞에 두고 B 가 A 바로 앞으로 급하게 들어오고, A 는 급브레이크로 자리를 내준 뒤 인사를 주고받는다.
+    pace = 속도 배율 (1 이면 시속 36km. 영상에서 천천히 보이게 하려면 낮춘다)"""
     road = Road(37.498437, 127.029417, 37.500712, 127.036993)   # 테헤란로 동쪽 방향 (715m 직선)
     base = 110.0
-    cruise = 10.0   # 36 km/h
+    cruise = 10.0 * pace   # pace 1 → 36 km/h
     cars = [
-        # 6.6초에 급브레이크 (1.3초 만에 36 → 20 km/h, 약 -3.5 m/s²), 잠깐 버틴 뒤 다시 가속.
-        # 양보하느라 약 17m 까지 벌어진 사이를 조금 빨리 달려(41 km/h) 다시 좁혀서, 앞차와 약 9.5m 간격으로 따라간다
+        # 6.6초에 브레이크 (1.3초 만에 속도를 55% 로), 잠깐 버틴 뒤 1.6초에 걸쳐 원래 속도로. 그 뒤로는 앞차와 같은 속도로 따라간다
+        # (양보하느라 벌어진 사이는 pace 1 일 때 약 15m, 0.6 일 때 약 11m)
         Car("A", "99허 0000", "emulator", base,
-            Line([(0, cruise), (6.6, cruise), (7.9, 5.5), (8.4, 5.5), (10.9, cruise), (12.0, 11.5), (15.6, 11.5), (17.1, cruise), (60, cruise)]),
+            Line([(0, cruise), (6.6, cruise), (7.9, cruise * 0.55), (8.4, cruise * 0.55), (10.0, cruise), (60, cruise)]),
             Ease([(0, -1.75)]), color=BLUE, label="A · 내 차", device=dev_a),
         # A 보다 6m 앞(차 사이 1.4m)에서 2.2초 만에 차로를 바꾼다
         Car("B", "12가 3690", "emulator", base + 6.0, Line([(0, cruise), (60, cruise)]),
             Ease([(0, 1.75), (6.2, 1.75), (8.4, -1.75)]), color=AMBER, label="B", blink=[(5.0, 8.8, "L")], device=dev_b),
-        Car("C", "55모 5501", "virtual", base - 14.0, Line([(0, 10.8), (60, 10.8)]),
+        Car("C", "55모 5501", "virtual", base - 14.0, Line([(0, cruise * 1.08), (60, cruise * 1.08)]),
             Ease([(0, -5.25)]), color=TEAL, label="C"),
-        Car("D", "", "plain", base - 9.0, Line([(0, 9.4), (60, 9.4)]), Ease([(0, 5.25)]), color=GREY),
+        Car("D", "", "plain", base - 9.0, Line([(0, cruise * 0.94), (60, cruise * 0.94)]), Ease([(0, 5.25)]), color=GREY),
         Car("E", "", "plain", base + 34.0, Line([(0, cruise), (60, cruise)]), Ease([(0, -1.75)]), color=GREY),
     ]
     steps = [
@@ -239,20 +240,20 @@ def scenario_merge(dev_a, dev_b):
                     extras={"work_zone": (base + 105.0, base + 160.0, 1.75)})
 
 
-def scenario_yield(dev_a, dev_b):
-    """좁은 골목에서 마주침: A 가 '먼저 가세요'를 보내고 빈자리로 비켜 주면 B 가 지나간다"""
-    road = Road(37.495722, 127.032628, 37.499081, 127.031)   # 테헤란로8길 (400m 직선, 북북서 방향)
-    base = 120.0
-    slow = 4.5      # 16 km/h
+def scenario_yield(dev_a, dev_b, pace=1.0):
+    """좁은 골목에서 마주침: A 가 '먼저 가세요'를 보내고 빈자리로 비켜 주면 B 가 지나간다. pace = 속도 배율"""
+    road = Road(37.495098, 127.035778, 37.497572, 127.036798)   # 역삼동 주택가 골목 (290m 직선, 북북동 방향)
+    base = 190.0           # 158m 지점의 옆길과 끝(290m) 사이, 옆길이 없는 구간에서 만난다
+    slow = 4.5 * pace      # pace 1 → 16 km/h
     a_stop = base + slow * 5 + slow * 3.5 / 2            # 처음 멈추는 곳
     gap = 14.0
     cars = [
         Car("A", "99허 0000", "emulator", base,
             Line([(0, slow), (5, slow), (8.5, 0), (15.5, 0), (16.5, 2.4), (18.3, 2.4), (20.5, 0),
-                  (27, 0), (29, 3.0), (32, slow), (60, slow)]),
+                  (27, 0), (29, slow * 0.67), (32, slow), (60, slow)]),
             Ease([(0, 0), (15.6, 0), (18.2, 2.2), (27.2, 2.2), (31, 0)]), color=BLUE, label="A · 내 차", device=dev_a),
         Car("B", "12가 3690", "emulator", a_stop + gap + (slow * 5 + slow * 3.5 / 2),
-            Line([(0, slow), (5, slow), (8.5, 0), (21, 0), (23, 3.5), (60, 3.5)]),
+            Line([(0, slow), (5, slow), (8.5, 0), (21, 0), (23, slow * 0.78), (60, slow * 0.78)]),
             Ease([(0, 0), (21, 0), (23, -0.45), (27, -0.45), (30, 0)]), direction=-1, color=AMBER, label="B", device=dev_b),
     ]
     steps = [

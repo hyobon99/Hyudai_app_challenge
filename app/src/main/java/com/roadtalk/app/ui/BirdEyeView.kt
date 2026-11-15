@@ -116,7 +116,8 @@ private data class DragState(val plate: String, val anchor: Offset, val start: O
  * 3D 그림은 [Scene3DView] (OpenGL) 가 그리고, 그 위에 차 이름표와 말풍선을 같은 카메라([Camera3D])로 자리를 계산해 얹는다.
  *  - 차를 누른 채 끌기: 방향 메뉴(기본 메시지 함의 6개가 정육각형으로 놓임)가 뜨고, 놓은 방향의 메시지가 그 차에게 전송된다.
  *    메시지가 놓인 자리는 메시지 함 화면의 6칸과 같다 (1번이 위, 시계 방향)
- *  - 차를 짧게 탭: 그 차를 받는 사람으로 선택 (네온 고리). 말할 때 대상을 말하지 않으면 이 차에게 간다
+ *  - 차를 짧게 탭: 그 차를 받는 사람으로 선택 (네온 고리). 말할 때 대상을 말하지 않으면 이 차에게 간다.
+ *    고리는 보낼 차를 고른 동안에만 보인다: 메시지를 보내면 풀리고, 한 번 더 누르거나 10초가 지나도 풀린다
  *  - 빈 도로를 탭: 그 자리가 속한 8방향 칸에서 가장 가까운 차를 선택
  *  - 주변 차는 내 길 위에 있으면 가장 가까운 차로의 가운데에 그린다 (GPS 오차 때문에 차선을 밟고 달리는 것처럼 보이지 않게)
  *  - 아래 버튼을 한 번 누르고 말하기: 음성을 인식하다가(STT SDK) 말을 멈추면 알아서 끝내고, 인식된 말이
@@ -146,10 +147,12 @@ fun BirdEyePanel(
     val textMeasurer = rememberTextMeasurer()
     val context = LocalContext.current
     val sceneView = remember { Scene3DView(context) }
+    /** 차를 누른 채 끄는 중이면 그 상태 (방향 메뉴를 그린다) */
+    var drag by remember { mutableStateOf<DragState?>(null) }
     // 차로에 맞추기 전의 실제 좌우 위치 (내 차로와 차로 수를 정하는 데 쓴다)
     val measuredCars = cars
     @Suppress("NAME_SHADOWING")
-    val cars = rememberSmoothedCars(cars) { sceneView.laneCentre to sceneView.laneCount }
+    val cars = rememberSmoothedCars(cars) { Triple(sceneView.laneCentre, sceneView.laneCount, sceneView.laneFree) }
     // 위치가 계속 갱신돼도 탭 처리가 최신 위치를 보도록
     val currentCars by rememberUpdatedState(cars)
     // 카메라 거리는 언제나 같다 (내 차 뒤 7m 까지 보이는 가까운 뷰). 뒤쪽에 차가 있어도 카메라를 물리지 않고,
@@ -165,7 +168,7 @@ fun BirdEyePanel(
             if (canvasSize.width == 0) continue
             val camera = Camera3D(canvasSize.width.toFloat(), canvasSize.height.toFloat(), currentRear)
             currentCars.forEach { car ->
-                val (f, l) = placement(car, currentRear)
+                val (f, l) = placement(car, currentRear, sceneView.laneFree, sceneView.shown)
                 val c = camera.project(l, CAR_HEIGHT_M / 2, -f) ?: return@forEach
                 Log.d(UI_LOG_TAG, "car ${Geo.plateKey(car.plate)} ${(canvasOrigin.x + c.first).toInt()} ${(canvasOrigin.y + c.second).toInt()}")
             }
@@ -175,8 +178,6 @@ fun BirdEyePanel(
     val currentOnSelectDirection by rememberUpdatedState(onSelectDirection)
     val currentSlots by rememberUpdatedState(messageSlots)
     val currentOnSend by rememberUpdatedState(onSend)
-    /** 차를 누른 채 끄는 중이면 그 상태 (방향 메뉴를 그린다) */
-    var drag by remember { mutableStateOf<DragState?>(null) }
     DisposableEffect(sceneView) {
         sceneView.onResume()
         onDispose { sceneView.onPause() }
@@ -194,14 +195,22 @@ fun BirdEyePanel(
     SideEffect {
         sceneView.frame = Scene3DView.Frame(
             cars = cars.map { car ->
-                val (f, l) = placement(car, rearM)
+                val (f, l) = placement(car, rearM, sceneView.laneFree)
+                val lat = car.latitude
+                val lng = car.longitude
+                val onMap = buildings != null && lat != null && lng != null
                 Scene3DView.Car(
+                    plate = car.plate,
+                    east = if (onMap) OsmBuildings.east(lng!!, buildings!!.originLat, buildings.originLng) else null,
+                    north = if (onMap) OsmBuildings.north(lat!!, buildings!!.originLat) else null,
+                    absHeadingDeg = car.headingDeg,
                     lateral = l,
                     forward = f,
                     headingDeg = car.relativeHeadingDeg ?: 0f,
                     type = car.carType ?: CarLook.typeOf(car.plate),
                     skin = car.skin ?: CarLook.defaultSkinOf(car.plate),
-                    selected = car.plate == selectedPlate,
+                    // 고리: 눌러서 고른 차, 그리고 지금 누른 채 끌고 있는 차
+                    selected = car.plate == selectedPlate || car.plate == drag?.plate,
                 )
             },
             myType = myType,
@@ -249,7 +258,7 @@ fun BirdEyePanel(
                             val down = awaitFirstDown()
                             val camera = Camera3D(size.width.toFloat(), size.height.toFloat(), currentRear)
                             fun centreOf(car: NearbyCar): Offset? {
-                                val (f, l) = placement(car, currentRear)
+                                val (f, l) = placement(car, currentRear, sceneView.laneFree, sceneView.shown)
                                 return camera.project(l, CAR_HEIGHT_M / 2, -f)?.let { Offset(it.first, it.second) }
                             }
                             val hit = currentCars
@@ -302,7 +311,7 @@ fun BirdEyePanel(
                     val isIncoming = incoming != null && Geo.plateKey(incoming.fromPlate) == key
                     val isSent = sent != null && Geo.plateKey(sent.toPlate) == key
                     if (!isIncoming && !isSent) return@forEach
-                    val (f, l) = placement(car, rearM)
+                    val (f, l) = placement(car, rearM, sceneView.laneFree, sceneView.shown)
                     val top = camera.project(l, CAR_HEIGHT_M + 0.6f, -f) ?: return@forEach
                     val bubbleAt = Offset(top.first, top.second - 14.dp.toPx())
                     if (isIncoming) drawBubble(textMeasurer, incoming!!.text, bubbleAt, strong = true)
@@ -375,11 +384,11 @@ private const val TALK_BUTTON_HEIGHT_DP = 132
 /**
  * 상대 위치는 칼만 필터가 0.1초마다 계산해 준다 (net/CarTracker). 그 사이를 매 프레임 조금씩 따라가게 해서 화면 주사율로 매끈하게 그린다.
  * (시정수 0.1초. 위치·방향만 보간하고 나머지 값은 최신 것을 쓴다)
- * 내 길 위의 차는 좌우 위치를 가장 가까운 차로의 가운데로 맞춘다. road() = 지금 그려진 내 길의 (가운데 자리 m, 차로 수).
+ * 내 길 위의 차는 좌우 위치를 가장 가까운 차로의 가운데로 맞춘다. road() = 지금 그려진 내 길의 (가운데 자리 m, 차로 수, 차선 없는 골목인지).
  * 차로를 바꿀 때는 옆 차로 가운데로 천천히(시정수 [LANE_CHANGE_SECONDS]) 옮겨 간다.
  */
 @Composable
-private fun rememberSmoothedCars(cars: List<NearbyCar>, road: () -> Pair<Float, Int>): List<NearbyCar> {
+private fun rememberSmoothedCars(cars: List<NearbyCar>, road: () -> Triple<Float, Int, Boolean>): List<NearbyCar> {
     val target by rememberUpdatedState(cars)
     var shown by remember { mutableStateOf(cars) }
     val laneByPlate = remember { HashMap<String, Int>() }
@@ -391,10 +400,12 @@ private fun rememberSmoothedCars(cars: List<NearbyCar>, road: () -> Pair<Float, 
                 last = now
                 val k = 1f - exp(-dt / SMOOTH_SECONDS)
                 val kLane = 1f - exp(-dt / LANE_CHANGE_SECONDS)
-                val (roadCentre, lanes) = road()
+                val (roadCentre, lanes, free) = road()
+                // 차선 없는 골목에서는 차로에 맞추지 않고 실제 자리에 그린다
+                if (free) laneByPlate.clear()
                 val previous = shown.associateBy { it.plate }
                 val next = target.map { t ->
-                    val kept = keepLane(t, roadCentre, lanes, laneByPlate)
+                    val kept = if (free) t else keepLane(t, roadCentre, lanes, laneByPlate)
                     previous[t.plate]?.let { p -> approach(p, kept, k, if (kept !== t) kLane else k) } ?: kept
                 }
                 if (laneByPlate.size > target.size) laneByPlate.keys.retainAll(target.mapTo(HashSet()) { it.plate })
@@ -408,7 +419,7 @@ private fun rememberSmoothedCars(cars: List<NearbyCar>, road: () -> Pair<Float, 
 /** 내 길 위를 나란히 달리는 차면 좌우 위치를 그 차로의 가운데로 바꾼 것을, 아니면 그대로 돌려준다 */
 private fun keepLane(car: NearbyCar, roadCentre: Float, lanes: Int, laneByPlate: MutableMap<String, Int>): NearbyCar {
     val lateral = car.lateralMeters
-    if (lateral == null || car.distanceMeters < 0 || !Lanes.onRoad(lateral, car.relativeHeadingDeg, roadCentre, lanes)) {
+    if (lateral == null || car.distanceMeters < 0 || !Lanes.onRoad(lateral, car.relativeHeadingDeg, roadCentre, lanes, car.forwardMeters ?: 0f)) {
         laneByPlate.remove(car.plate)
         return car
     }
@@ -440,19 +451,25 @@ private fun approach(from: NearbyCar, to: NearbyCar, k: Float, kLateral: Float):
 private const val UI_LOG_TAG = "RoadTalkUi"
 /** 0.1초마다 오는 위치를 따라가는 빠르기. 갱신 간격과 같게 잡아 계단은 없애고 뒤처짐은 작게 (상대 속도 5m/s 에서 0.5m) */
 private const val SMOOTH_SECONDS = 0.1f
-/** 내 차로를 정할 때 참고하는 주변 차의 앞뒤 범위 (m) */
-private const val NEIGHBOUR_RANGE_M = 120f
+/** 내 차로를 정할 때 참고하는 주변 차의 앞뒤 범위 (m). 멀리 있는 차는 좌우 위치가 부정확해서 가까운 차만 본다 */
+private const val NEIGHBOUR_RANGE_M = 30f
 /** 차로에 맞춰 그리는 차가 옆 차로 가운데로 옮겨 가는 빠르기 (차로 변경이 순간이동처럼 보이지 않게) */
 private const val LANE_CHANGE_SECONDS = 0.35f
 /**
  * 차를 그릴 (앞뒤, 좌우) m. 벡터를 모르면 칸의 대표 위치, 너무 멀면 보이는 범위 끝으로 당겨서.
  * 화면은 내 차 뒤 [rearM] 까지, 앞은 [FRONT_SHOWN_M] 쯤까지만 보이므로, 그보다 멀리 있는 차는 화면 맨 아래·맨 위에 걸치도록 그린다
  * (보이지 않으면 고를 수도, 그 차가 보낸 말풍선을 볼 수도 없다)
+ * free = 차선 없는 골목을 달리는 중, shown = 그때 3D 화면이 차를 그린 자리 (차량번호 → 좌우 m, 앞뒤 m)
  */
-private fun placement(car: NearbyCar, rearM: Float): Pair<Float, Float> {
+private fun placement(car: NearbyCar, rearM: Float, free: Boolean = false, shown: Map<String, FloatArray>? = null): Pair<Float, Float> {
+    // 차선 없는 골목: 3D 화면이 그 차를 실제로 그린 자리 (지도에 맞춘 자리)가 있으면 그것을 쓴다
+    if (free) shown?.get(car.plate)?.let { return it[1] to it[0] }
     val f = car.forwardMeters
     val l = car.lateralMeters
     val (forward, lateral) = if (f != null && l != null && car.distanceMeters >= 0) f to l else nominal(car.position)
+    // 차선 없는 골목에서는 당겨 그리지 않는다: 지나친 차는 화면 밖으로 나가게 둔다
+    // (길가에 차가 줄지어 서 있어서, 당겨 그리면 지나친 차들이 화면 아래 한자리에 겹쳐 붙어 따라온다)
+    if (free) return forward to lateral
     return forward.coerceIn(-(rearM - REAR_EDGE_M), FRONT_SHOWN_M) to lateral.coerceIn(-MAX_SHOWN_SIDE_M, MAX_SHOWN_SIDE_M)
 }
 

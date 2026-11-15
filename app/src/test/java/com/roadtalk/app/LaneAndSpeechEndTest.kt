@@ -59,6 +59,9 @@ class LaneAndSpeechEndTest {
         assertEquals(Triple(3, 1, 1), Lanes.fit(3, 0, 1, 1, 10))
         // 지도의 차로 수로 모자라면 늘린다: 왼쪽 1 · 오른쪽 2 차로에 차가 있으면 4차로
         assertEquals(Triple(4, 1, 1), Lanes.fit(3, 0, 1, 2, 10))
+        // 다만 지도보다 한 차로까지만 늘린다: 한 차로 골목에서 옆 차가 두 차로 옆으로 계산돼도 두 차로
+        assertEquals(2, Lanes.fit(1, 0, 2, 0, 10).first)
+        assertEquals(Triple(2, 1, 1), Lanes.fit(1, 0, 1, 0, 10))
         // 옆에 차가 없으면 지도 그대로
         assertEquals(Triple(3, 0, 2), Lanes.fit(3, 0, 0, 0, 10))
         // 양방향 4차로(중앙선 오른쪽 = 2번부터)에서 오른쪽에 차가 있으면 2번 차로
@@ -87,6 +90,12 @@ class LaneAndSpeechEndTest {
         assertTrue("방향을 모르면 나란한 것으로 본다", Lanes.onRoad(3f, null, 0f, 3))
         assertFalse("가로지르는 차", Lanes.onRoad(3f, 90f, 0f, 3))
         assertFalse("옆길의 차", Lanes.onRoad(14f, 0f, 0f, 3))
+        // 길 가장자리에서 조금 벗어나게 계산된 차는 길 위의 차로 보고 가장 바깥 차로에 놓는다 (인도 위에 그리지 않는다)
+        assertTrue(Lanes.onRoad(-4.5f, 180f, 0f, 1))
+        assertEquals(0, Lanes.laneOf(-4.5f, 0f, 1))
+        // 멀리 있는 차는 좌우 위치가 더 틀릴 수 있어 여유를 더 준다
+        assertFalse(Lanes.onRoad(7f, 0f, 0f, 1))
+        assertTrue(Lanes.onRoad(7f, 0f, 0f, 1, forward = 50f))
     }
 
     @Test
@@ -99,6 +108,23 @@ class LaneAndSpeechEndTest {
         val reversed = OsmRoads.Road(3, floatArrayOf(94f, 34.2f, -94f, -34.2f), 5, true, 16.5f)
         assertEquals(250f, OsmRoads.bearingAt(1f, 2f, listOf(reversed))!!, 0.5f)
         assertNull("가까운 길이 없으면 모른다", OsmRoads.bearingAt(1f, 2f, listOf(far)))
+    }
+
+    @Test
+    fun headingFollowsTheRoadWhileChangingLanes() {
+        // 동북동(약 70도)으로 뻗은 길 위에서
+        val road = OsmRoads.Road(1, floatArrayOf(-94f, -34.2f, 94f, 34.2f), 5, true, 16.5f)
+        val roads = listOf(road)
+        // 차로를 바꾸느라 이동 방향이 25도 틀어져도 길의 방향
+        assertEquals(70f, OsmRoads.alignedHeading(95f, 1f, 2f, roads), 0.5f)
+        assertEquals(70f, OsmRoads.alignedHeading(48f, 1f, 2f, roads), 0.5f)
+        // 길이 그려진 방향과 반대로 달리면 반대 방향 (250도)
+        assertEquals(250f, OsmRoads.alignedHeading(262f, 1f, 2f, roads), 0.5f)
+        // 길을 가로지르는 중(90도쯤 다름)이면 이동 방향 그대로
+        assertEquals(160f, OsmRoads.alignedHeading(160f, 1f, 2f, roads), 0.01f)
+        // 가까운 길이 없으면 이동 방향 그대로
+        assertEquals(95f, OsmRoads.alignedHeading(95f, 200f, 300f, roads), 0.01f)
+        assertEquals(10f, OsmRoads.angleBetween(355f, 5f), 0.01f)
     }
 
     @Test

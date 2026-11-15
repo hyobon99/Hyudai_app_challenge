@@ -1,6 +1,7 @@
 package com.roadtalk.app.map
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -119,7 +120,15 @@ class OsmBuildingsTest {
         // 지도에 차로 수가 없으면 등급으로 어림한다: 큰길 양방향 6 (한쪽만이면 3), 골목 양방향 2 (일방통행이면 1)
         assertEquals(6, OsmRoads.lanesOf("primary", null, oneway = false))
         assertEquals(3, OsmRoads.lanesOf("primary", "", oneway = true))
+        // 차로 수가 안 적힌 골목은 중앙선 없는 한 차로
         assertEquals(2, OsmRoads.lanesOf("residential", null, oneway = false))
+        assertEquals(2, OsmRoads.lanesOf("living_street", null, oneway = false))
+        // 차로 수가 적혀 있지 않은 골목은 차선 없는 길, 큰길이나 차로 수가 적힌 길은 차선 있는 길
+        assertFalse(OsmRoads.markedOf("residential", null))
+        assertFalse(OsmRoads.markedOf("living_street", ""))
+        assertTrue(OsmRoads.markedOf("residential", "2"))
+        assertTrue(OsmRoads.markedOf("tertiary", null))
+        assertEquals(2, OsmRoads.lanesOf("tertiary", null, oneway = false))
         assertEquals(1, OsmRoads.lanesOf("residential", "abc", oneway = true))
         assertEquals(1, OsmRoads.lanesOf("primary_link", null, oneway = true))
         assertEquals(4 * 3.3f, OsmRoads.widthOf(4), 0.01f)

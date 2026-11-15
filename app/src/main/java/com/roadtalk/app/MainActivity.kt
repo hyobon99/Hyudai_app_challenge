@@ -85,6 +85,10 @@ class MainActivity : ComponentActivity() {
         if (intent.hasExtra("garage")) { if (intent.getBooleanExtra("garage", false)) viewModel.openGarage() else viewModel.closeGarage() }
         //   '메시지 함' 화면 열고 닫기: --ez messages true   ·   칸 바꾸기: --ei slot 1 --es message "조심히 가세요"
         if (intent.hasExtra("messages")) { if (intent.getBooleanExtra("messages", false)) viewModel.openMessages() else viewModel.closeMessages() }
+        //   순정 내비에 경로 안내 요청 (지도를 길게 눌러 '안내 시작' 한 것과 같다): --es route "37.498678,127.033500"
+        intent.getStringExtra("route")?.split(",")?.mapNotNull { it.trim().toDoubleOrNull() }?.takeIf { it.size == 2 }?.let { (lat, lng) ->
+            viewModel.startRouteTo(lat, lng)
+        }
         if (intent.hasExtra("slot")) intent.getStringExtra("message")?.let { viewModel.setMessageSlot(intent.getIntExtra("slot", 0), it) }
     }
 

@@ -34,7 +34,14 @@ import kotlin.math.sin
 class Scene3DView(context: Context) : GLSurfaceView(context) {
 
     /** 주변 차 한 대. lateral/forward = 내 차 기준 오른쪽/앞 (m), headingDeg = 내 진행 방향 기준 시계 방향 각도 */
-    data class Car(val lateral: Float, val forward: Float, val headingDeg: Float, val type: Int, val skin: Int, val selected: Boolean)
+    /**
+     * lateral · forward · headingDeg = 내 차 기준 위치와 방향. east · north · absHeadingDeg = 지도 기준 위치와 방위 (모르면 null).
+     * 차선 없는 골목에서는 지도 기준 값으로 그린다 (차가 도로와 함께 제자리에 있게)
+     */
+    data class Car(
+        val lateral: Float, val forward: Float, val headingDeg: Float, val type: Int, val skin: Int, val selected: Boolean,
+        val plate: String = "", val east: Float? = null, val north: Float? = null, val absHeadingDeg: Float? = null,
+    )
 
     /** 지도 자료와 같은 기준점에서 본 내 차 위치 (m) · 방위 · 속도 · 그 값이 측정된 시각 */
     data class Ego(val east: Float, val north: Float, val headingDeg: Float, val speedMps: Float, val atMillis: Long)
@@ -69,6 +76,13 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
     @Volatile var laneCentre = 0f
         private set
     @Volatile var laneCount = DEFAULT_LANES
+    /** 지금 달리는 길이 차선 없는 골목인지 (그러면 주변 차를 차로에 맞추지 않고 실제 자리에 그린다) */
+    @Volatile var laneFree = false
+    /**
+     * 차선 없는 골목에서 주변 차가 실제로 그려진 자리: 차량번호 → (화면 기준 좌우 m, 앞뒤 m). 말풍선과 누르기 판정이 이 자리를 쓴다.
+     * 골목이 아니면 비어 있다
+     */
+    @Volatile var shown: Map<String, FloatArray> = emptyMap()
         private set
 
     init {
@@ -114,6 +128,10 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private var myDivider = 0
         private var myCenter = 0f
         private var myRoadKnown = false
+        /** 차선 없는 골목을 달리는 중 (차로에 맞추지 않는다) */
+        private var myFree = false
+        /** 골목에서 내 차를 그리는 자리를 정하는 값: 길 가운데가 내 차에서 오른쪽으로 몇 m 인지를 천천히 따라간 것 */
+        private var shownCentre = 0f
         /** 내 차가 있는 차로 (왼쪽부터 0). 내 차는 언제나 이 차로의 가운데에 그린다 */
         private var myLane: Int? = null
         /** 마지막으로 찾은 내 길의 지도상 차로 수와 일방통행 여부 (주변 차에 맞춰 차로를 늘리기 전 값) */
@@ -180,8 +198,8 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             frames++
             if (now - framesSince > 5_000_000_000L) {
                 if (framesSince != 0L) {
-                    Log.d(GlKit.TAG, "fps=%.0f buildings=%d roadTriangles=%d lanes=%d divider=%d center=%.1f".format(
-                        frames * 1e9f / (now - framesSince), buildingsDrawn, strips.size / 24, myLanes, myDivider, myCenter))
+                    Log.d(GlKit.TAG, "fps=%.0f buildings=%d roadTriangles=%d lanes=%d divider=%d center=%.1f free=%b".format(
+                        frames * 1e9f / (now - framesSince), buildingsDrawn, strips.size / 24, myLanes, myDivider, myCenter, myFree))
                 }
                 frames = 0
                 framesSince = now
@@ -190,20 +208,29 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             scroll = (scroll + f.speedMps.coerceIn(0f, 60f) * dt) % SCROLL_PERIOD
 
             val camera = Camera3D(width.toFloat(), height.toFloat(), f.rearM)
-            val vp = camera.viewProjection
+            val baseVp = camera.viewProjection
             GLES20.glClearColor(SKY[0], SKY[1], SKY[2], 1f)
             GLES20.glClearStencil(0)
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT or GLES20.GL_STENCIL_BUFFER_BIT)
             kit.begin(camera.eye, GlKit.LIGHT, camera.fogStart, camera.fogEnd, SKY)
 
             // 도로 밖 땅
-            kit.draw(quad, kit.white, vp, Mat4.multiply(Mat4.translation(0f, -0.03f, 0f), Mat4.scale(4000f, 1f, 4000f)), GROUND)
+            kit.draw(quad, kit.white, baseVp, Mat4.multiply(Mat4.translation(0f, -0.03f, 0f), Mat4.scale(4000f, 1f, 4000f)), GROUND)
 
             // 내가 달리는 길의 차로 수와 자리를 지도에서 찾고, 지도의 다른 길과 횡단보도를 깐다
             val onMap = updateEgo(f, dt)
-            if (onMap) findMyRoad(f, dt) else placeMyLane(f, dt, mapLanes, myDivider, mapOneway, null)
+            if (onMap) {
+                findMyRoad(f, dt)
+            } else {
+                myFree = false
+                placeMyLane(f, dt, mapLanes, myDivider, mapOneway, null)
+            }
             laneCentre = myCenter
             laneCount = myLanes
+            laneFree = myFree
+            // 차선 없는 골목에서는 화면을 내 차가 아니라 길 가운데에 맞춘다: 내 차가 옆으로 비켜 서도 도로와 길가의 차는 화면에서 움직이지 않고
+            // 내 차만 옆으로 움직인다 (내 위치가 보정될 때마다 화면 전체가 좌우로 흔들리지 않는다)
+            val vp = if (myFree) Mat4.multiply(baseVp, Mat4.translation(-myCenter, 0f, 0f)) else baseVp
             val lanesHalf = myLanes * LANE_M / 2
             strips.setRoad(myCenter - lanesHalf - CURB_IN_M, myCenter + lanesHalf + CURB_IN_M, myCenter - lanesHalf - WALK_OUT_M, myCenter + lanesHalf + WALK_OUT_M)
             openingCount = 0
@@ -264,10 +291,22 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             }
 
             // 차 위치
-            val myModel = Mat4.identity()
+            val myModel = if (myFree) Mat4.translation(myCenter - shownCentre, 0f, 0f) else Mat4.identity()
+            // 골목에서는 주변 차를 지도 기준 위치로 그린다 (도로 · 건물과 같은 기준이라 서로 어긋나거나 흔들리지 않는다)
+            val drawn = if (myFree && onMap) HashMap<String, FloatArray>() else null
             val others = f.cars.map { car ->
-                car to Mat4.multiply(Mat4.translation(car.lateral, 0f, -car.forward), Mat4.rotationY(-car.headingDeg))
+                var x = car.lateral
+                var forward = car.forward
+                var heading = car.headingDeg
+                if (drawn != null && car.east != null && car.north != null) {
+                    x = rightOf(car.east, car.north)
+                    forward = forwardOf(car.east, car.north)
+                    car.absHeadingDeg?.let { heading = it - egoHeading }
+                    drawn[car.plate] = floatArrayOf(x - myCenter, forward)
+                }
+                car to Mat4.multiply(Mat4.translation(x, 0f, -forward), Mat4.rotationY(-heading))
             }
+            shown = drawn ?: emptyMap()
 
             // 바닥 그림자: 모델을 빛 방향으로 바닥에 눌러 그린다. 스텐실로 한 번 칠한 곳은 다시 칠하지 않는다
             GLES20.glEnable(GLES20.GL_BLEND)
@@ -306,8 +345,14 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             val n = myLanes
             kit.draw(roadLeft, cityTexture, vp, Mat4.translation(myCenter - (n - 1) * LANE_M / 2, 0f, z), GlKit.WHITE)
             for (i in 1 until n) {
-                val part = if (i == myDivider) roadPlain else roadDash
+                val part = if (i == myDivider || myFree) roadPlain else roadDash
                 kit.draw(part, cityTexture, vp, Mat4.translation(myCenter + (i - n / 2f) * LANE_M, 0f, z), GlKit.WHITE)
+                if (myFree) {
+                    // 차선 없는 골목: 도로 부품에 그려져 있는 차로 경계의 점선을 아스팔트 색 띠로 덮는다.
+                    // 도로 토막마다 따로 깔아야 멀리 갈수록 옅어지는 정도(안개)가 도로와 같다
+                    val cover = Mat4.multiply(Mat4.translation(myCenter + (i - n / 2f) * LANE_M, 0.014f, z), Mat4.scale(0.5f, 1f, 10.2f))
+                    kit.draw(quad, kit.white, vp, cover, LANE_COVER)
+                }
             }
             kit.draw(roadRight, cityTexture, vp, Mat4.translation(myCenter + (n - 1) * LANE_M / 2, 0f, z), GlKit.WHITE)
         }
@@ -384,12 +429,35 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
             }
             val road = best
             if (road == null) {
-                placeMyLane(f, dt, mapLanes, myDivider, mapOneway, null)
+                if (!myFree) placeMyLane(f, dt, mapLanes, myDivider, mapOneway, null)
                 return
             }
             mapLanes = road.lanes.coerceIn(1, MAX_LANES)
             mapOneway = road.oneway
+            if (!road.marked) {
+                placeFree(dt, mapLanes, bestX)
+                return
+            }
+            myFree = false
             placeMyLane(f, dt, mapLanes, if (road.oneway || mapLanes < 2) 0 else mapLanes / 2, road.oneway, bestX)
+        }
+
+        /**
+         * 차선 없는 골목: 차로에 맞추지 않는다. 길은 지도의 폭대로 선 없이 그리고, 내 차는 길 위의 실제 자리에 둔다
+         * (measuredCentre = 길 가운데가 내 차에서 오른쪽으로 몇 m). 길가에 선 차 사이로 가운데를 지나가거나 옆으로 비켜 서는 모습이 그대로 보인다
+         */
+        private fun placeFree(dt: Float, lanes: Int, measuredCentre: Float) {
+            val limit = lanes * LANE_M / 2 + 2f
+            val target = measuredCentre.coerceIn(-limit, limit)
+            // 길은 지도상의 자리 그대로 둔다 (화면이 길 가운데에 맞춰져 있어서, 이 값을 늦춰 따라가면 도로가 화면에서 흔들린다).
+            // 내 차를 그리는 자리만 천천히 따라가게 해서, 1초에 한 번 오는 위치 보정이 뚝뚝 끊겨 보이지 않게 한다
+            myCenter = target
+            if (!myFree || !myRoadKnown) shownCentre = target else shownCentre += (target - shownCentre) * (1f - exp(-dt / 0.45f))
+            myRoadKnown = true
+            myLane = null
+            myLanes = lanes
+            myDivider = 0
+            myFree = true
         }
 
         /**
@@ -685,6 +753,8 @@ class Scene3DView(context: Context) : GLSurfaceView(context) {
         private val SHADOW = floatArrayOf(0f, 0f, 0f, 0.26f)
         /** 내 길 토막의 아스팔트와 같은 색 */
         private val ASPHALT = floatArrayOf(0.29f, 0.298f, 0.314f, 1f)
+        /** 내 길 도로 부품의 아스팔트와 같게 보이는 색 (차선 없는 골목에서 점선을 덮는 띠) */
+        private val LANE_COVER = floatArrayOf(0.300f, 0.304f, 0.326f, 1f)
         private val YELLOW = floatArrayOf(0.98f, 0.80f, 0.20f, 1f)
         private val ROOF = floatArrayOf(0.80f, 0.81f, 0.83f, 1f)
         /** 건물 벽 색 (건물마다 하나) */
