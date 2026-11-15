@@ -28,6 +28,22 @@ android {
         }
     }
 
+    buildTypes {
+        release {
+            // 제출용 APK: 따로 서명 키를 만들지 않고 Android 의 기본 디버그 키로 서명한다 (설치·시연용. 스토어 배포용 키가 아니다).
+            // 저장소에 비밀번호나 키 파일을 넣지 않아도 누구나 같은 방법으로 빌드할 수 있다
+            signingConfig = signingConfigs.getByName("debug")
+            // 코드 줄이기(R8)는 켜지 않는다: Pleos SDK 가 이름으로 찾는 코드가 지워지면 실행 중에 오류가 날 수 있다
+            isMinifyEnabled = false
+        }
+    }
+
+    lint {
+        // 릴리스 빌드의 검사가 'Fragment 를 1.3.0 이상으로 올리라' 며 멈춘다. 실제로 들어가는 Fragment 는 1.8.2 라서 해당되지 않는다
+        // (지도 · Pleos 라이브러리가 옛 버전을 적어 둔 것을 보고 내는 경고)
+        disable += "InvalidFragmentVersionForActivityResult"
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
