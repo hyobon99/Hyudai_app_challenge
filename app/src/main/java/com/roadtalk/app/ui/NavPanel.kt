@@ -45,8 +45,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.roadtalk.app.location.LocationGateway
+import com.roadtalk.app.map.RoadRoute
 import com.roadtalk.app.navi.NaviGateway
-import com.roadtalk.app.net.NearbyCar
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import org.osmdroid.config.Configuration
 import org.osmdroid.events.MapEventsReceiver
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
@@ -69,11 +72,13 @@ import kotlin.math.sin
  *   왼쪽 아래 도착 정보 (도착 예정 시각, 남은 거리·시간, 목적지, 안내 종료)
  *   오른쪽 위 현재 도로 제한속도
  * 지도를 길게 누르면 그 위치로 순정 내비에 경로 안내를 요청한다.
+ * 지도에는 내 위치만 표시한다 (다른 Car-ind CHAT 차는 왼쪽 도로 화면에서 본다).
+ * 안내 중에는 목적지까지 가는 길을 파란 선으로 그린다. 순정 내비가 고른 경로의 선은 SDK 가 주지 않아서
+ * OpenStreetMap 도로 자료로 따로 찾은 길이다 → [RoadRoute]
  */
 @Composable
 fun NavPanel(
     myFix: LocationGateway.Fix?,
-    cars: List<NearbyCar>,
     navi: NaviGateway.State,
     onRequestRoute: (latitude: Double, longitude: Double) -> Unit,
     onCancelRoute: () -> Unit,
@@ -85,6 +90,34 @@ fun NavPanel(
     var pendingDestination by remember { mutableStateOf<GeoPoint?>(null) }
     val naviConnected by rememberUpdatedState(navi.connected)
     val currentOnVisibleRadius by rememberUpdatedState(onVisibleRadius)
+    val currentFix by rememberUpdatedState(myFix)
+    // 목적지까지 가는 길. 목적지가 바뀌면 새로 찾고, 길에서 벗어나면 지금 위치에서 다시 찾는다
+    val destinationLatitude = navi.destination?.latitude
+    val destinationLongitude = navi.destination?.longitude
+    var route by remember { mutableStateOf<List<RoadRoute.Point>>(emptyList()) }
+    LaunchedEffect(destinationLatitude, destinationLongitude) {
+        if (destinationLatitude == null || destinationLongitude == null) {
+            route = emptyList()
+            RoadRoute.forget()
+            return@LaunchedEffect
+        }
+        route = RoadRoute.remembered(destinationLatitude, destinationLongitude)
+        while (true) {
+            val fix = currentFix
+            if (fix != null) {
+                val away = RoadRoute.nearest(route, fix.latitude, fix.longitude)?.second
+                if (away == null || away > OFF_ROUTE_M) {
+                    val found = withContext(Dispatchers.IO) {
+                        RoadRoute.fetch(fix.latitude, fix.longitude, destinationLatitude, destinationLongitude)
+                    }
+                    if (found != null) route = found
+                    // 길 찾기 서버에 너무 자주 묻지 않는다
+                    delay(ROUTE_ASK_AGAIN_MS)
+                }
+            }
+            delay(ROUTE_CHECK_MS)
+        }
+    }
     val mapView = remember {
         Configuration.getInstance().apply {
             // 타일 캐시를 앱 전용 폴더에 두고, OSM 타일 서버 정책에 따라 앱 식별자를 User-Agent 로 보낸다
@@ -130,14 +163,18 @@ fun NavPanel(
             mapView.onDetach()
         }
     }
-    LaunchedEffect(myFix, cars, navi.destination) {
+    LaunchedEffect(route) {
+        overlay.route = route.map { GeoPoint(it.latitude, it.longitude) }
+        overlay.routePoints = route
+        mapView.invalidate()
+    }
+    LaunchedEffect(myFix, navi.destination) {
         overlay.destination = navi.destination?.let { GeoPoint(it.latitude, it.longitude) }
         val fix = myFix
         if (fix != null) {
             val me = GeoPoint(fix.latitude, fix.longitude)
             overlay.me = me
             overlay.headingDeg = fix.heading
-            overlay.others = cars.mapNotNull { it.toGeoPoint(fix) }
             mapView.mapOrientation = -fix.heading   // 진행 방향이 위
             mapView.controller.setCenter(me)
         }
@@ -242,6 +279,12 @@ fun NavPanel(
         )
     }
 }
+
+/** 경로에서 이만큼(m) 넘게 벗어나면 지금 위치에서 길을 다시 찾는다 */
+private const val OFF_ROUTE_M = 60.0
+/** 경로에서 벗어났는지 살피는 간격, 한 번 물어본 뒤 다시 물을 수 있을 때까지의 시간 (ms) */
+private const val ROUTE_CHECK_MS = 2000L
+private const val ROUTE_ASK_AGAIN_MS = 15000L
 
 /** 지도 위 흰 카드 색 (지도가 밝아서 패널 안에서는 어두운 글자를 쓴다) */
 private object NavColors {
@@ -404,27 +447,14 @@ private fun turnLabel(type: TurnType): String = when (type) {
     else -> "경로 따라 주행"
 }
 
-/** 상대 위치 벡터(앞뒤·좌우 m)를 내 위치·방향 기준 위경도로 되돌린다 */
-private fun NearbyCar.toGeoPoint(me: LocationGateway.Fix): GeoPoint? {
-    val f = forwardMeters ?: return null
-    val l = lateralMeters ?: return null
-    if (distanceMeters < 0) return null
-    val h = Math.toRadians(me.heading.toDouble())
-    val north = f * cos(h) - l * sin(h)
-    val east = f * sin(h) + l * cos(h)
-    val metersPerDegLat = 111_320.0
-    return GeoPoint(
-        me.latitude + north / metersPerDegLat,
-        me.longitude + east / (metersPerDegLat * cos(Math.toRadians(me.latitude))),
-    )
-}
-
-/** 내 차(파란 원 안 흰 화살표), 근처 Car-ind CHAT 차(주황 점), 목적지(빨간 핀)를 지도 위에 그린다 */
+/** 목적지까지 가는 길(파란 선), 목적지(빨간 핀), 내 차(파란 원 안 흰 화살표)를 지도 위에 그린다 */
 private class CarsOverlay : Overlay() {
     var me: GeoPoint? = null
     var headingDeg = 0f
-    var others: List<GeoPoint> = emptyList()
     var destination: GeoPoint? = null
+    /** 목적지까지 가는 길 (같은 점들을 두 가지 꼴로: 지도에 찍을 때 / 내 위치와 견줄 때) */
+    var route: List<GeoPoint> = emptyList()
+    var routePoints: List<RoadRoute.Point> = emptyList()
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -435,13 +465,20 @@ private class CarsOverlay : Overlay() {
         style = Paint.Style.FILL
         color = 0x332F6BFF
     }
+    private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
     private val point = Point()
     private val arrow = Path()
+    private val routePath = Path()
 
     override fun draw(canvas: Canvas, mapView: MapView, shadow: Boolean) {
         if (shadow) return
         val density = mapView.resources.displayMetrics.density
         stroke.strokeWidth = 2.5f * density
+        drawRoute(canvas, mapView, density)
         destination?.let { d ->
             mapView.projection.toPixels(d, point)
             fill.color = 0xFFE53935.toInt()
@@ -449,12 +486,6 @@ private class CarsOverlay : Overlay() {
             canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), 12f * density, stroke)
             fill.color = android.graphics.Color.WHITE
             canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), 4f * density, fill)
-        }
-        others.forEach { p ->
-            mapView.projection.toPixels(p, point)
-            fill.color = 0xFFFF8A3D.toInt()
-            canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), 8f * density, fill)
-            canvas.drawCircle(point.x.toFloat(), point.y.toFloat(), 8f * density, stroke)
         }
         val my = me ?: return
         mapView.projection.toPixels(my, point)
@@ -478,5 +509,29 @@ private class CarsOverlay : Overlay() {
         fill.color = android.graphics.Color.WHITE
         canvas.drawPath(arrow, fill)
         canvas.restore()
+    }
+
+    /** 내 위치에서 목적지까지 남은 길만 그린다 (지나온 길은 그리지 않는다): 흰 테두리 위에 파란 선 */
+    private fun drawRoute(canvas: Canvas, mapView: MapView, density: Float) {
+        val my = me ?: return
+        if (route.size < 2 || route.size != routePoints.size) return
+        val start = RoadRoute.nearest(routePoints, my.latitude, my.longitude)?.first ?: return
+        routePath.rewind()
+        mapView.projection.toPixels(my, point)
+        routePath.moveTo(point.x.toFloat(), point.y.toFloat())
+        for (i in start + 1 until route.size) {
+            mapView.projection.toPixels(route[i], point)
+            routePath.lineTo(point.x.toFloat(), point.y.toFloat())
+        }
+        destination?.let { d ->
+            mapView.projection.toPixels(d, point)
+            routePath.lineTo(point.x.toFloat(), point.y.toFloat())
+        }
+        line.color = android.graphics.Color.WHITE
+        line.strokeWidth = 13f * density
+        canvas.drawPath(routePath, line)
+        line.color = 0xFF2F6BFF.toInt()
+        line.strokeWidth = 8f * density
+        canvas.drawPath(routePath, line)
     }
 }
