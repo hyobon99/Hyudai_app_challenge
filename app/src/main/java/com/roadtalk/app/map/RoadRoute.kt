@@ -4,6 +4,8 @@ import android.util.Log
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
 
@@ -18,7 +20,13 @@ object RoadRoute {
     data class Point(val latitude: Double, val longitude: Double)
 
     /** 찾아 둔 길: 어느 목적지로 가는 길인지와 함께 기억한다 (지도 화면을 닫았다 열어도 다시 묻지 않게) */
-    data class Found(val toLatitude: Double, val toLongitude: Double, val points: List<Point>)
+    data class Found(val toLatitude: Double, val toLongitude: Double, val points: List<Point>, val seconds: Double?)
+
+    /** 다음에 꺾는 곳: 거기까지 남은 거리, 오른쪽인지, 유턴인지 */
+    data class Turn(val meters: Int, val right: Boolean, val uTurn: Boolean)
+
+    /** 경로 위에서 지금 어디쯤인지: 목적지까지 남은 거리 · 시간, 다음에 꺾는 곳 (더 꺾을 데가 없으면 null = 이대로 가면 목적지) */
+    data class Progress(val remainMeters: Int, val remainSeconds: Int, val turn: Turn?)
 
     @Volatile var last: Found? = null
         private set
@@ -50,8 +58,9 @@ object RoadRoute {
                     Log.w(TAG, "route server answered ${connection.responseCode}")
                     return null
                 }
-                val points = parse(connection.inputStream.bufferedReader().use { it.readText() })
-                if (points != null) last = Found(toLatitude, toLongitude, points)
+                val json = connection.inputStream.bufferedReader().use { it.readText() }
+                val points = parse(json)
+                if (points != null) last = Found(toLatitude, toLongitude, points, parseSeconds(json))
                 points
             } finally {
                 connection.disconnect()
@@ -68,6 +77,69 @@ object RoadRoute {
         val encoded = GEOMETRY.find(json)?.groupValues?.get(1) ?: return null
         // JSON 문자열 안에서 \ 는 \\ 로 적혀 있다
         return decodePolyline(encoded.replace("\\\\", "\\")).takeIf { it.size >= 2 }
+    }
+
+    /** 서버의 답에서 그 길을 가는 데 걸리는 시간(초)을 꺼낸다 */
+    fun parseSeconds(json: String): Double? = DURATION.find(json)?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it > 0 }
+
+    /**
+     * 경로 위에서 지금 어디쯤인지. 남은 거리는 내 자리에서 경로를 따라 잰 길이이고, 남은 시간은 길 전체에 걸리는 시간을 남은 길이만큼 나눈 것
+     * (totalSeconds 를 모르면 시속 약 25km 로 어림한다). 다음 회전은 경로의 선이 [TURN_DEG] 도 넘게 꺾이는 첫 자리.
+     * 순정 내비의 안내값 대신 지도에 그린 길과 맞는 값을 보여 주려고 쓴다. 경로가 없으면 null
+     */
+    fun progress(route: List<Point>, latitude: Double, longitude: Double, totalSeconds: Double? = null): Progress? {
+        val start = nearest(route, latitude, longitude)?.first ?: return null
+        val mPerLat = 111_320.0
+        val mPerLng = 111_320.0 * cos(Math.toRadians(latitude))
+        val xs = DoubleArray(route.size) { (route[it].longitude - longitude) * mPerLng }
+        val ys = DoubleArray(route.size) { (route[it].latitude - latitude) * mPerLat }
+        // 내 자리를 경로의 start 번째 구간 위로 옮긴 점
+        val dx = xs[start + 1] - xs[start]
+        val dy = ys[start + 1] - ys[start]
+        val length2 = dx * dx + dy * dy
+        val t = if (length2 == 0.0) 0.0 else (-(xs[start] * dx + ys[start] * dy) / length2).coerceIn(0.0, 1.0)
+        // 앞으로 갈 길: 내 자리 → start 다음 점 → … → 끝
+        val px = ArrayList<Double>(route.size - start + 1)
+        val py = ArrayList<Double>(route.size - start + 1)
+        px.add(xs[start] + dx * t)
+        py.add(ys[start] + dy * t)
+        for (i in start + 1 until route.size) {
+            px.add(xs[i])
+            py.add(ys[i])
+        }
+        val along = DoubleArray(px.size)
+        for (i in 1 until px.size) along[i] = along[i - 1] + hypot(px[i] - px[i - 1], py[i] - py[i - 1])
+        val remain = along.last()
+
+        fun at(distance: Double): Pair<Double, Double> {
+            val d = distance.coerceIn(0.0, remain)
+            var i = 1
+            while (i < along.size - 1 && along[i] < d) i++
+            val span = along[i] - along[i - 1]
+            val u = if (span == 0.0) 0.0 else (d - along[i - 1]) / span
+            return (px[i - 1] + (px[i] - px[i - 1]) * u) to (py[i - 1] + (py[i] - py[i - 1]) * u)
+        }
+
+        var turn: Turn? = null
+        for (i in 1 until px.size - 1) {
+            if (along[i] < 1.0 || remain - along[i] < 1.0) continue
+            // 꺾이는 점 앞뒤로 TURN_SPAN_M 떨어진 자리끼리 방향을 견준다 (점이 촘촘한 굽은 길도 한 번의 회전으로 본다)
+            val (ax, ay) = at(along[i] - TURN_SPAN_M)
+            val (bx, by) = at(along[i] + TURN_SPAN_M)
+            val into = Math.toDegrees(atan2(px[i] - ax, py[i] - ay))
+            val out = Math.toDegrees(atan2(bx - px[i], by - py[i]))
+            var bend = (out - into) % 360.0
+            if (bend > 180.0) bend -= 360.0
+            if (bend < -180.0) bend += 360.0
+            if (abs(bend) >= TURN_DEG) {
+                turn = Turn(along[i].toInt(), right = bend > 0, uTurn = abs(bend) >= UTURN_DEG)
+                break
+            }
+        }
+        var whole = 0.0
+        for (i in 1 until route.size) whole += hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
+        val seconds = if (totalSeconds != null && whole > 1.0) totalSeconds * remain / whole else remain / DEFAULT_MPS
+        return Progress(remain.toInt(), seconds.toInt(), turn)
     }
 
     /** 'encoded polyline' (좌표를 글자로 줄여 적는 표준 방식) 을 좌표 목록으로 푼다 */
@@ -127,6 +199,13 @@ object RoadRoute {
     }
 
     private val GEOMETRY = Regex("\"geometry\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
+    private val DURATION = Regex("\"duration\"\\s*:\\s*([0-9.]+)")
+    /** 경로의 선이 이만큼(도) 넘게 꺾이면 회전, 이만큼 넘으면 유턴으로 본다. 앞뒤 이 거리(m)의 방향을 견준다 */
+    private const val TURN_DEG = 40.0
+    private const val UTURN_DEG = 150.0
+    private const val TURN_SPAN_M = 12.0
+    /** 걸리는 시간을 모를 때 어림하는 빠르기 (m/s, 시속 약 25km) */
+    private const val DEFAULT_MPS = 7.0
     private const val ENDPOINT = "https://router.project-osrm.org/route/v1/driving"
     private const val TIMEOUT_MS = 8000
     private const val TAG = "RoadTalkRoute"

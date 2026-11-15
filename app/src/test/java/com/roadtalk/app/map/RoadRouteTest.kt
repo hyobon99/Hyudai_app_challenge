@@ -43,4 +43,30 @@ class RoadRouteTest {
         assertEquals(0.0, RoadRoute.nearest(route, 37.5005, 127.0)!!.second, 0.5)
         assertNull(RoadRoute.nearest(emptyList(), 37.5, 127.0))
     }
+
+    @Test
+    fun measuresWhatIsLeftAndFindsTheNextTurn() {
+        // 북쪽으로 약 111m 간 뒤 오른쪽(동쪽)으로 꺾어 약 88m 가는 길
+        val route = listOf(RoadRoute.Point(37.500, 127.000), RoadRoute.Point(37.501, 127.000), RoadRoute.Point(37.501, 127.001))
+        val start = RoadRoute.progress(route, 37.500, 127.000, totalSeconds = 60.0)!!
+        assertEquals(199.6, start.remainMeters.toDouble(), 2.0)
+        assertEquals(60.0, start.remainSeconds.toDouble(), 1.5)
+        assertEquals(111.0, start.turn!!.meters.toDouble(), 2.0)
+        assertTrue(start.turn!!.right)
+        assertTrue(!start.turn!!.uTurn)
+        // 절반쯤 갔을 때: 남은 거리 · 시간 · 회전까지의 거리가 줄어든다
+        val half = RoadRoute.progress(route, 37.5005, 127.000, totalSeconds = 60.0)!!
+        assertEquals(144.0, half.remainMeters.toDouble(), 2.0)
+        assertEquals(43.0, half.remainSeconds.toDouble(), 2.0)
+        assertEquals(55.5, half.turn!!.meters.toDouble(), 2.0)
+        // 꺾은 뒤에는 더 꺾을 데가 없다 (이대로 가면 목적지)
+        val after = RoadRoute.progress(route, 37.501, 127.0005)!!
+        assertNull(after.turn)
+        assertEquals(44.0, after.remainMeters.toDouble(), 2.0)
+        // 왼쪽으로 꺾는 길
+        val left = listOf(RoadRoute.Point(37.500, 127.000), RoadRoute.Point(37.501, 127.000), RoadRoute.Point(37.501, 126.999))
+        assertTrue(!RoadRoute.progress(left, 37.500, 127.000)!!.turn!!.right)
+        assertNull(RoadRoute.progress(emptyList(), 37.5, 127.0))
+        assertEquals(123.4, RoadRoute.parseSeconds("""{"code":"Ok","routes":[{"legs":[{"duration":123.4,"distance":900}],"duration":123.4}]}""")!!, 0.01)
+    }
 }

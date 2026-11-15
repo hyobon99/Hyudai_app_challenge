@@ -82,7 +82,7 @@ class NaviGateway(context: Context) {
         override fun onDestinationChanged() = refresh()
 
         override fun onDestinationInfo(destinationInfo: DestinationInfo) {
-            Log.d(TAG, "destination name=${destinationInfo.name} lat=${destinationInfo.latitude} remain=${destinationInfo.remainDistance}m/${destinationInfo.remainTime}s")
+            Log.d(TAG, "destination name=${destinationInfo.name} lat=${destinationInfo.latitude} lng=${destinationInfo.longitude} remain=${destinationInfo.remainDistance}m/${destinationInfo.remainTime}s")
             val valid = destinationInfo.latitude != 0.0 || destinationInfo.longitude != 0.0
             if (!routing || !valid) return
             _state.update {

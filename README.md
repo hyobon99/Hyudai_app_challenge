@@ -12,7 +12,7 @@
 - **받은 메시지 읽어 주기**: 상대 차 위에 말풍선으로 뜨고, TextToSpeech SDK가 "앞차가 보낸 메시지. 감사합니다"처럼 읽어 준다
 - **욕설 및 부적절한 말 차단**: 금칙어 사전과 AI로 부적절한 표현을 검열한다. 도로 화면 가운데에 "전송에 실패했습니다"가 뜨고 소리로도 말해 준다
 - **받으면 '띵~'**: 다른 차의 메시지가 도착하면 종소리가 한 번 울리고 읽어 준다 (보내는 쪽에서는 울리지 않는다)
-- **순정 내비 연동**: NaviHelper SDK로 다음 회전, 목적지, 남은 거리·시간, 제한속도를 보여 주고, 지도에서 고른 곳으로 경로 안내를 요청한다
+- **순정 내비 연동**: NaviHelper SDK로 목적지와 제한속도를 받아 오고, 지도에서 고른 곳으로 경로 안내를 요청한다. 지도에는 목적지까지 가는 길을 그리고, 그 길에서 잰 남은 거리·시간과 다음 회전을 보여 준다
 - **내 차 고르기**: 커스텀 화면에서 차종 6가지와 색 6가지를 고르면 다른 차 화면에도 그 모습으로 보인다
 
 ## 사용하는 Pleos Connect SDK
@@ -114,8 +114,8 @@
 - 차 위에 네온 말풍선으로 뜨고, **TextToSpeech SDK**로 읽어 준다 (예: "앞차가 보낸 메시지. 감사합니다" · `chat/SpeechText.kt`)
 
 ### 오른쪽: 내비게이션 (`ui/NavPanel.kt`)
-- 지도는 OpenStreetMap 타일(osmdroid), 내 위치 중심·진행 방향이 위. 지도에는 내 위치만 표시한다 (다른 차는 왼쪽 도로 화면에서 본다)
-- 그 위에 **NaviHelper SDK**(`navi/NaviGateway.kt`)로 받은 순정 내비 정보를 표시: 다음 회전, 목적지, 남은 거리·시간, 제한속도
+- 지도는 OpenStreetMap 자료를 벡터 타일([OpenFreeMap](https://openfreemap.org/))로 받아 [MapLibre](https://maplibre.org/)로 그린다. 내 위치 중심·진행 방향이 위로 오게 지도를 돌리는데, 가게 이름과 아이콘은 지도와 따로 그려져서 기울지 않고 똑바로 선다. 지도에는 내 위치만 표시한다 (다른 차는 왼쪽 도로 화면에서 본다)
+- 그 위에 흰 카드로 안내 정보를 표시: 다음 회전, 도착 예정 시각, 남은 거리·시간, 목적지, 제한속도. 목적지와 제한속도는 **NaviHelper SDK**(`navi/NaviGateway.kt`)로 받은 순정 내비의 값이고, 남은 거리·시간과 다음 회전은 지도에 그린 길에서 잰 값이다 (순정 내비의 값은 내비가 아는 내 위치 기준이라, 에뮬레이터처럼 그 위치가 실제와 다르면 지도와 맞지 않는다. 길을 받지 못했을 때만 순정 내비의 값을 쓴다)
 - 지도를 길게 누르면 그 위치로 순정 내비에 경로 안내를 요청하고, 안내 카드의 "안내 종료"로 취소한다
 - 안내 중에는 내 위치에서 목적지까지 가는 길을 파란 선으로 그린다 (`map/RoadRoute.kt`). 순정 내비가 고른 경로의 선은 SDK 가 주지 않아서, OpenStreetMap 도로 자료로 길을 찾아 주는 공개 서버([OSRM](https://project-osrm.org/))에 출발·도착 좌표만 보내 받은 길이다. 그래서 순정 내비가 실제로 안내하는 길과 다를 수 있다. 길에서 60m 넘게 벗어나면 지금 위치에서 다시 찾는다
 
@@ -248,6 +248,9 @@ python tools/scenario/run_scenario.py merge --live --loop   # 영상으로 만�
 | 차 10종 + 색 팔레트 6종 | [Low Poly Cars](https://brokenvector.itch.io/low-poly-cars) — Broken Vector | 무료 배포. 페이지에 라이선스 문구가 따로 없다 |
 | 도로·나무·가로등·신호등 | [Low Poly City & Traffic Pack: FREE Lite](https://ggiedrius.itch.io/lowpoly-city-traffic-lite) — GGiedrius | 개인·상업 프로젝트에 사용 가능. 모델을 에셋으로 되팔거나 재배포하지 말 것 (팩 안의 README.txt. ) |
 | 건물 윤곽·높이, 도로(차로 수), 횡단보도, 신호등 위치 (`assets/buildings_demo.json`) | OpenStreetMap | ODbL — "© OpenStreetMap contributors" 표기 |
+| 오른쪽 지도 (벡터 타일 · 스타일) | [OpenFreeMap](https://openfreemap.org/) · OpenMapTiles · OpenStreetMap | 무료 · 키 없음. 지도 오른쪽 아래에 출처 표기 |
+| 지도 그리는 엔진 | [MapLibre Native](https://github.com/maplibre/maplibre-native) | BSD 2-Clause |
+| 목적지까지 가는 길 찾기 | [OSRM](https://project-osrm.org/) 공개 서버 (자료: OpenStreetMap) | 시연용 공개 서버. 출발·도착 좌표만 보낸다 |
 
 모델의 권리는 각 제작자에게 있다. 다른 곳에 쓰려면 위 페이지에서 원본을 받아 조건을 확인할 것.
 

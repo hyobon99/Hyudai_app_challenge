@@ -131,7 +131,6 @@ fun RoadTalkScreen(vm: RoadTalkViewModel) {
                         navi = navi,
                         onRequestRoute = vm::startRouteTo,
                         onCancelRoute = vm::cancelRoute,
-                        onVisibleRadius = vm::onMapRadius,
                         modifier = Modifier
                             .weight(0.58f)
                             .fillMaxHeight(),

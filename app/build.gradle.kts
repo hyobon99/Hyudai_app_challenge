@@ -22,6 +22,10 @@ android {
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
+        // 차량(arm64)과 에뮬레이터(x86_64)용 코드만 넣는다. 지도 엔진(MapLibre)이 기종마다 13MB 씩이라, 안 쓰는 기종은 뺀다
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     compileOptions {
@@ -43,7 +47,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.firestore)
     implementation(libs.geofire.common)
-    implementation(libs.osmdroid)
+    implementation(libs.maplibre)
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
